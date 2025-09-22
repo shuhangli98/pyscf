@@ -40,6 +40,7 @@ from pyscf.pbc.cc.kccsd_rhf import (
 einsum = lib.einsum
 
 def update_amps(cc, t1, t2, eris):
+    logger.info(cc, 'SL DEBUG: Before update_amps. Current use %d MB', lib.current_memory()[0])
     kpts = cc.kpts
     kqrts = cc.kqrts
     rmat = cc.rmat
@@ -56,14 +57,21 @@ def update_amps(cc, t1, t2, eris):
     ki_ibz_bz = kpts.ibz2bz[np.arange(kpts.nkpts_ibz)]
     fov = fock[:, :nocc, nocc:]
     kconserv = cc.khelper.kconserv
-
+    
+    logger.info(cc, 'SL DEBUG: Before Foo functions. Current use %d MB', lib.current_memory()[0])
     Foo = imdk.cc_Foo(kpts, kqrts, t1, t2, eris, rmat)
+    logger.info(cc, 'SL DEBUG: After Foo function. Current use %d MB', lib.current_memory()[0])
     Fvv = imdk.cc_Fvv(kpts, kqrts, t1, t2, eris, rmat)
+    logger.info(cc, 'SL DEBUG: After Fvv function. Current use %d MB', lib.current_memory()[0])
     Fov = imdk.cc_Fov(kpts, kqrts, t1, t2, eris, rmat)
+    logger.info(cc, 'SL DEBUG: After Fov function. Current use %d MB', lib.current_memory()[0])
     Loo = imdk.Loo(kpts, kqrts, t1, t2, eris, rmat)
+    logger.info(cc, 'SL DEBUG: After Loo function. Current use %d MB', lib.current_memory()[0])
     Lvv = imdk.Lvv(kpts, kqrts, t1, t2, eris, rmat)
+    logger.info(cc, 'SL DEBUG: After Lvv function. Current use %d MB', lib.current_memory()[0])
 
     Fov = Fov.todense()
+    logger.info(cc, 'SL DEBUG: After todense function. Current use %d MB', lib.current_memory()[0])
 
     # Move energy terms to the other side
     for ki_ibz in range(kpts.nkpts_ibz):
@@ -72,12 +80,17 @@ def update_amps(cc, t1, t2, eris):
         Fvv[ki][np.diag_indices(nvir)] -= mo_e_v[ki]
         Loo[ki][np.diag_indices(nocc)] -= mo_e_o[ki]
         Lvv[ki][np.diag_indices(nvir)] -= mo_e_v[ki]
-
+        
+    logger.info(cc, 'SL DEBUG: Before t1_new function. Current use %d MB', lib.current_memory()[0])
     t1new = ktensor.empty_like(t1)
     t1 = t1.todense()
+    logger.info(cc, 'SL DEBUG: Before t2_new function. Current use %d MB', lib.current_memory()[0])
     t2new = ktensor.empty_like(t2)
+    logger.info(cc, 'SL DEBUG: Before t2_new to dense function. Current use %d MB', lib.current_memory()[0])
     t2 = t2.todense()
 
+    logger.info(cc, 'SL DEBUG: Before T1 equations. Current use %d MB', lib.current_memory()[0])
+    
     # T1 equation
     for ka_ibz in range(kpts.nkpts_ibz):
         ki = ka = kpts.ibz2bz[ka_ibz]
@@ -141,6 +154,7 @@ def update_amps(cc, t1, t2, eris):
                        fac=[1.0,-1.0])
         t1new[ki] /= eia
 
+    logger.info(cc, 'SL DEBUG: Before T2 equations. Current use %d MB', lib.current_memory()[0])
 
     # T2 equation
     Loo = Loo.todense()
@@ -153,11 +167,13 @@ def update_amps(cc, t1, t2, eris):
     mem_now = lib.current_memory()[0]
     if (cc.incore_complete or
         _memory_4d(cc, [nocc,]*4) + mem_now < cc.max_memory * .9):
+        logger.info(cc, "SL DEBUG: Woooo with incore.")
         Woooo = imdk.cc_Woooo(kpts, kqrts, t1, t2, eris, rmat)
     else:
+        logger.info(cc, "SL DEBUG: Woooo with outcore.")
         metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
                     'label': 'oooo', 'trans': 'ccnn',
-                    'incore': False}
+                    'incore': False, 'prefix':'Woooo'}
         Woooo = ktensor.empty([nocc,]*4, dtype=t1.dtype, metadata=metadata)
         Woooo = imdk.cc_Woooo(kpts, kqrts, t1, t2, eris, rmat, Woooo)
 
@@ -218,15 +234,17 @@ def update_amps(cc, t1, t2, eris):
     mem_now = lib.current_memory()[0]
     if (cc.incore_complete or
         _memory_4d(cc, [nocc,nocc,nvir,nvir])*2 + mem_now < cc.max_memory*.9):
+        logger.info(cc, "SL DEBUG: Wvoov, Wvovo with incore.") # incore_complete should be false by default.
         Wvoov = imdk.cc_Wvoov(kpts, kqrts, t1, t2, eris, rmat)
         Wvovo = imdk.cc_Wvovo(kpts, kqrts, t1, t2, eris, rmat)
     else:
+        logger.info(cc, "SL DEBUG: Wvoov, Wvovo with outcore.")
         metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
                     'trans': 'ccnn', 'incore': False}
         Wvoov = ktensor.empty([nvir,nocc,nocc,nvir], dtype=t1.dtype,
-                              metadata={**metadata, 'label':'voov'})
+                              metadata={**metadata, 'label':'voov', 'prefix':'Wvoov'})
         Wvovo = ktensor.empty([nvir,nocc,nvir,nocc], dtype=t1.dtype,
-                              metadata={**metadata, 'label':'vovo'})
+                              metadata={**metadata, 'label':'vovo', 'prefix':'Wvovo'})
         Wvoov = imdk.cc_Wvoov(kpts, kqrts, t1, t2, eris, rmat, Wvoov)
         Wvovo = imdk.cc_Wvovo(kpts, kqrts, t1, t2, eris, rmat, Wvovo)
 
@@ -289,6 +307,7 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
     mem_now = lib.current_memory()[0]
     if (not cc.incore_complete and
         cc.direct and getattr(eris, 'Lpv', None) is not None):
+        logger.info(cc, "SL DEBUG: Wvvvv direct")
         def get_Wvvvv(ka, kb, kc):
             Lpv = eris.Lpv
             kd = kconserv[ka, kc, kb]
@@ -314,7 +333,7 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
     else:
         metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
                     'label': 'vvvv', 'trans': 'ccnn',
-                    'incore': False}
+                    'incore': False, 'prefix':'Wvvvv'}
         _Wvvvv = ktensor.empty([nvir,]*4, dtype=t1.dtype, metadata=metadata)
         _Wvvvv = imdk.cc_Wvvvv(kpts, kqrts, t1, t2, eris, rmat, _Wvvvv)
 
@@ -346,6 +365,7 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
     return Ht2
 
 def energy(cc, t1, t2, eris):
+    logger.info(cc, 'SL DEBUG: Before energy. Current use %d MB', lib.current_memory()[0])
     kpts = cc.kpts
     kqrts = cc.kqrts
 
@@ -375,11 +395,12 @@ def energy(cc, t1, t2, eris):
     e /= nkpts
     if abs(e.imag) > 1e-4:
         logger.warn(cc, 'Non-zero imaginary part found in KRCCSD energy %s', e)
+    logger.info(cc, 'SL DEBUG: After energy. Current use %d MB', lib.current_memory()[0])
     return e.real
 
 
 class KsymAdaptedRCCSD(RCCSD):
-    _keys = {'kqrts', 'rmat', 'ktensor_direct', 'eris_outcore'}
+    _keys = {'kqrts', 'rmat', 'ktensor_direct', 'eris_outcore', 't2_incore'}
 
     def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
         '''
@@ -400,8 +421,10 @@ class KsymAdaptedRCCSD(RCCSD):
         self.rmat = None
         self.ktensor_direct = False
         self.eris_outcore = False
+        self.t2_incore = True
 
     def ao2mo(self, mo_coeff=None):
+        logger.info(self, 'SL DEBUG: Before ao2mo. Current use %d MB', lib.current_memory()[0])
         eris = _PhysicistsERIs()
         eris._common_init_(self, mo_coeff)
 
@@ -417,10 +440,12 @@ class KsymAdaptedRCCSD(RCCSD):
             eris = _make_eris_incore(self, eris, self._scf.with_df.ao2mo)
         else:
             eris = _make_eris_outcore(self, eris, self._scf.with_df.ao2mo)
+        logger.info(self, 'SL DEBUG: After ao2mo. Current use %d MB', lib.current_memory()[0])
         return eris
 
     def init_amps(self, eris):
         time0 = logger.process_clock(), logger.perf_counter()
+        logger.info(self, 'SL DEBUG: Before init_amps. Current use %d MB', lib.current_memory()[0])
         nocc = self.nocc
         nvir = self.nmo - nocc
         nkpts = self.nkpts
@@ -431,12 +456,12 @@ class KsymAdaptedRCCSD(RCCSD):
         assert rmat is not None
 
         metadata = {'kpts': kpts, 'rmat': rmat,
-                    'label': 'ov', 'trans': 'nc', 'incore': True}
+                    'label': 'ov', 'trans': 'nc', 'incore': True, 'prefix':'t1_init'}
         t1 = ktensor.zeros((nocc, nvir), dtype=eris.fock.dtype,
                            metadata=metadata)
 
         metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
-                    'label': 'oovv', 'trans': 'nncc', 'incore': True}
+                    'label': 'oovv', 'trans': 'nncc', 'incore': self.t2_incore, 'prefix':'t2_init'}
         t2 = ktensor.empty((nocc,nocc,nvir,nvir), dtype=eris.fock.dtype,
                            metadata=metadata)
         mo_e_o = [eris.mo_energy[k][:nocc] for k in range(nkpts)]
@@ -466,6 +491,7 @@ class KsymAdaptedRCCSD(RCCSD):
             emp2 += np.einsum('ijab,ijab', t2[ki, kj, ka], woovv) * weight
 
         self.emp2 = emp2.real / nkpts
+        logger.info(self, 'SL DEBUG: After init_amps. Current use %d MB', lib.current_memory()[0])
         logger.info(self, 'Init t2, MP2 energy (with fock eigenvalue shift) = %.15g', self.emp2)
         logger.timer(self, 'init mp2', *time0)
         return self.emp2, t1, t2
@@ -486,12 +512,12 @@ class KsymAdaptedRCCSD(RCCSD):
         t2_flat = vec[t1_size:]
 
         metadata = {'kpts': kpts, 'rmat': rmat,
-                    'label': 'ov', 'trans': 'nc', 'incore': True}
+                    'label': 'ov', 'trans': 'nc', 'incore': True, 'prefix':'t1_v2amp'}
         t1 = ktensor.fromraw(t1_flat, (nocc,nvir), dtype=vec.dtype,
                              metadata=metadata)
 
         metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
-                    'label': 'oovv', 'trans': 'nncc', 'incore': True}
+                    'label': 'oovv', 'trans': 'nncc', 'incore': self.t2_incore, 'prefix': 't2_v2amp'}
         t2 = ktensor.fromraw(t2_flat, (nocc,nocc,nvir,nvir), dtype=vec.dtype,
                              metadata=metadata)
         return t1, t2
@@ -605,9 +631,12 @@ def _make_eris_outcore(cc, eris, fao2mo):
                      or not isinstance(cc._scf.with_df, (GDF, RSGDF))
                      or cc._scf.cell.dimension == 2)
     if vvvv_required:
+        logger.info(cc, 'SL DEBUG: Requirng full vvvv. Current use %d MB', lib.current_memory()[0])
         eris.vvvv = ktensor.empty([nvir,nvir,nvir,nvir], dtype=dtype,
                                   metadata={**common_metadata, 'label': 'vvvv'})
-
+    else:
+        logger.info(cc, 'SL DEBUG: NOT Requirng full vvvv. Current use %d MB', lib.current_memory()[0])
+        
     kpts = cc.kpts.kpts
     nkpts = len(kpts)
     kqrts = cc.kqrts

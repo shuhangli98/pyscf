@@ -67,7 +67,8 @@ class load_balancer:
             outblocks.append(segment_blocks)
         ###print("index 0 block 1")
         ###print(outblocks[0][1])
-        self.outblocks = np.asarray(outblocks)
+        # self.outblocks = np.asarray(outblocks)
+        self.outblocks = outblocks
         #if rank == 0:
         #    ##print("final block structure")
         #    ##print(outblocks)

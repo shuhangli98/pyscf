@@ -9,7 +9,7 @@ Also shown are molecular EA/IP-ADC Gamma-point calculations using a supercell.
 '''
 
 import numpy as np
-from pyscf.pbc import gto, scf, adc
+from pyscf.pbc import gto, scf, adc, mp, cc
 from pyscf import adc as mol_adc
 from pyscf.pbc.tools.pbc import super_cell
 
@@ -31,6 +31,7 @@ cell.a = '''
 3.370137329, 0.000000000, 3.370137329
 3.370137329, 3.370137329, 0.000000000
 '''
+cell.space_group_symmetry = True
 cell.build()
 
 nmp = [1,2,2]
@@ -46,7 +47,24 @@ kadc  = adc.KRADC(kmf)
 
 #KMP2 energy
 emp2, t1, t2 = kadc.kernel_gs()
+mypt = mp.KMP2(kmf)
+emp2_mp, _ = mypt.kernel()
+mycc = cc.KRCCSD(kmf)
+mycc.keep_exxdiv = False
+emp2_cc, _, _= mycc.kernel()
+
+# None -0.009496847487719144 Init -0.00843504686024058
+# Ewald -0.007788753124696426 Init -0.00706010660703776
+
+# kpts = cell.make_kpts(nmp, with_gamma_point=True, space_group_symmetry=True)
+# kmf = scf.KRHF(cell, kpts=kpts, exxdiv=None).density_fit()
+# ekrhf = kmf.kernel()
+# mycc_ksymm = cc.KsymAdaptedRCCSD(kmf)
+# emp2_ksymm, _, _= mycc_ksymm.kernel(mbpt2=True)
 print("PBC KMP2 Energy:", emp2)
+print("PBC KMP2 Energy (from mp):", emp2_mp)
+print("PBC KCC Energy (from cc):", emp2_cc)
+# print("PBC KMP2 Energy (from ksymm cc):", emp2_ksymm)
 
 #KMP3 energy
 kadc.method = 'adc(3)'

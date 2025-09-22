@@ -37,6 +37,16 @@ def empty_like(a, *args, **kwargs):
                           a.metadata)
     else:
         return np.empty_like(a)
+    
+def zeros_like(a, *args, **kwargs):
+    if isinstance(a, KsymmArray):
+        return KsymmArray(a.subarray_shape,
+                          a.dtype,
+                          a.subarray_order,
+                          a.metadata,
+                          init_with_zeros=True)
+    else:
+        return np.zeros_like(a)
 
 
 class KsymmArray(NDArrayOperatorsMixin):
@@ -76,8 +86,20 @@ class KsymmArray(NDArrayOperatorsMixin):
                     data.append(fn_init(self.subarray_shape, self.dtype, order))
                 data = np.asarray(data, order='K')
         else:
-            self._datafile = lib.H5TmpFile()
-            data = self._datafile.create_dataset('data', shape, self.dtype.char)
+            prefix = self.metadata.get('prefix', f'ksymm_{self.metadata.get("label","arr")}')
+            shape = [n_subarray,] + self.subarray_shape
+            if self.subarray_ndim == 4:
+                n1,n2,n3,n4 = self.subarray_shape  # = nocc,nocc,nvir,nvir
+                tile_v = min(64, n3, n4)           # ~32–128 is fine
+                chunks = (1, n1, n2, tile_v, tile_v)
+            elif self.subarray_ndim == 2:
+                n1,n2 = self.subarray_shape        # e.g. (nocc,nvir)
+                chunks = (1, n1, min(256, n2))
+            else:
+                chunks = None
+            
+            self._datafile = lib.H5TmpFile(prefix=prefix)
+            data = self._datafile.create_dataset('data', shape, self.dtype.char, chunks=chunks)
         return data
 
     @property

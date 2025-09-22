@@ -58,6 +58,25 @@ def safeAllreduceInPlace(comm, in_array):
         tmp = in_array[tuple(which_slice)].copy()
         comm.Allreduce(MPI.IN_PLACE, tmp, op=MPI.SUM)
         in_array[tuple(which_slice)] = tmp
+        
+
+def safeAllreduceInPlace_ksymm(comm, ksymm):
+    data = ksymm.data  
+    print(f"ksymm date shape {ksymm.data.shape}")
+    kqrts = ksymm.metadata['kqrts']
+    n_subarray = len(kqrts.kqrts_ibz)
+    shape = [n_subarray,] + ksymm.subarray_shape
+    print(f"myshape {shape}")
+    length = len(shape)
+    chunk_size = get_max_blocksize_from_mem(list(shape),16.,MEM_SIZE,priority_list=numpy.arange(length)[::-1])
+    task_list = generate_task_list(chunk_size, shape)
+    
+    for block in task_list:
+        which_slice = [slice(*x) for x in block]
+        tmp = data[tuple(which_slice)].copy()
+        comm.Allreduce(MPI.IN_PLACE, tmp, op=MPI.SUM)
+        data[tuple(which_slice)] = tmp
+
 
 def safeBcastInPlace(comm, in_array, root=0):
     shape = in_array.shape

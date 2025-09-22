@@ -67,6 +67,7 @@ def ipccsd_matvec(eom, vector, kshift, imds=None, diag=None):
             Hr2[ki, kj] -= einsum('kbij,k->ijb', imds.Wovoo[kshift, kb, ki], r1)
     # 2h1p-2h1p block
     if eom.partition == 'mp':
+        logger.info(eom, 'MATVEC Using MP partition for EOM-IP-CCSD')
         fock = imds.eris.fock
         foo = fock[:, :nocc, :nocc]
         fvv = fock[:, nocc:, nocc:]
@@ -175,8 +176,9 @@ def ipccsd_diag(eom, kshift, imds=None, diag=None):
 
     Hr2 = np.zeros((nkpts, nkpts, nocc, nocc, nvir), dtype=t1.dtype)
     if eom.partition == 'mp':
-        foo = eom.eris.fock[:, :nocc, :nocc]
-        fvv = eom.eris.fock[:, nocc:, nocc:]
+        logger.info(eom, 'DIAG Using MP partition for EOM-IP-CCSD')
+        foo = imds.eris.fock[:, :nocc, :nocc]
+        fvv = imds.eris.fock[:, nocc:, nocc:]
         for ki in range(nkpts):
             for kj in range(nkpts):
                 kb = kconserv[ki, kshift, kj]
@@ -460,7 +462,8 @@ def eaccsd_matvec(eom, vector, kshift, imds=None, diag=None):
 
     # 2p1h-2p1h block
     if eom.partition == 'mp':
-        fock = eom.eris.fock
+        logger.info(eom, 'MATVEC Using MP partition for EOM-EA-CCSD')
+        fock = imds.eris.fock
         foo = fock[:, :nocc, :nocc]
         fvv = fock[:, nocc:, nocc:]
         for kj in range(nkpts):
@@ -581,6 +584,7 @@ def eaccsd_diag(eom, kshift, imds=None, diag=None):
 
     Hr2 = np.zeros((nkpts, nkpts, nocc, nvir, nvir), dtype=t2.dtype)
     if eom.partition == 'mp':
+        logger.info(eom, 'DIAG Using MP partition for EOM-EA-CCSD')
         foo = imds.eris.fock[:, :nocc, :nocc]
         fvv = imds.eris.fock[:, nocc:, nocc:]
         for kj in range(nkpts):

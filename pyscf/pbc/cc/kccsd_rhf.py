@@ -500,7 +500,7 @@ class RCCSD(pyscf.cc.ccsd.CCSD):
 
     _keys = {
         'kpts', 'khelper', 'ip_partition', 'ea_partition', 'max_space',
-        'direct', 'keep_exxdiv',
+        'direct', 'keep_exxdiv','mem_save', 'incore',
     }
 
     def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
@@ -518,6 +518,8 @@ class RCCSD(pyscf.cc.ccsd.CCSD):
         # don't modify the following attributes, unless you know what you are doing
         self.keep_exxdiv = False
         self.__imds__ = None
+        self.mem_save = False
+        self.incore = True
 
     @property
     def nkpts(self):
@@ -611,7 +613,7 @@ class RCCSD(pyscf.cc.ccsd.CCSD):
         self.dump_flags()
 
         self.e_hf = self.get_e_hf()
-        if eris is None:
+        if eris is None or (not self.incore):
             # eris = self.ao2mo()
             eris = self.ao2mo(self.mo_coeff)
         self.eris = eris
@@ -651,7 +653,7 @@ class RCCSD(pyscf.cc.ccsd.CCSD):
                                                 kptlist=kptlist)
 
     def ao2mo(self, mo_coeff=None):
-        return _ERIS(self, mo_coeff)
+        return _ERIS(self, mo_coeff, method='incore' if self.incore else 'outcore')
 
     to_gpu = lib.to_gpu
 
@@ -814,14 +816,29 @@ class _ERIS:  # (pyscf.cc.ccsd._ChemistsERIs):
             self.dtype = dtype
         else:
             log.info('using HDF5 ERI storage')
-            self.feri1 = lib.H5TmpFile()
+            self.feri1 = lib.H5TmpFile(prefix='oooo')
+            self.feri2 = lib.H5TmpFile(prefix='ooov')
+            self.feri3 = lib.H5TmpFile(prefix='oovv')
+            self.feri4 = lib.H5TmpFile(prefix='ovov')
+            self.feri5 = lib.H5TmpFile(prefix='voov')
+            self.feri6 = lib.H5TmpFile(prefix='vovv')
+            self.feri7 = lib.H5TmpFile(prefix='vvvv')
 
             self.oooo = self.feri1.create_dataset('oooo', (nkpts, nkpts, nkpts, nocc, nocc, nocc, nocc), dtype.char)
-            self.ooov = self.feri1.create_dataset('ooov', (nkpts, nkpts, nkpts, nocc, nocc, nocc, nvir), dtype.char)
-            self.oovv = self.feri1.create_dataset('oovv', (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir), dtype.char)
-            self.ovov = self.feri1.create_dataset('ovov', (nkpts, nkpts, nkpts, nocc, nvir, nocc, nvir), dtype.char)
-            self.voov = self.feri1.create_dataset('voov', (nkpts, nkpts, nkpts, nvir, nocc, nocc, nvir), dtype.char)
-            self.vovv = self.feri1.create_dataset('vovv', (nkpts, nkpts, nkpts, nvir, nocc, nvir, nvir), dtype.char)
+            self.ooov = self.feri2.create_dataset('ooov', (nkpts, nkpts, nkpts, nocc, nocc, nocc, nvir), dtype.char)
+            
+            if not cc.mem_save:
+                log.info('oovv, ovov, voov, vovv integrals will be computed explicitly')
+                self.oovv = self.feri3.create_dataset('oovv', (nkpts, nkpts, nkpts, nocc, nocc, nvir, nvir), dtype.char)
+                self.ovov = self.feri4.create_dataset('ovov', (nkpts, nkpts, nkpts, nocc, nvir, nocc, nvir), dtype.char)
+                self.voov = self.feri5.create_dataset('voov', (nkpts, nkpts, nkpts, nvir, nocc, nocc, nvir), dtype.char)
+                self.vovv = self.feri6.create_dataset('vovv', (nkpts, nkpts, nkpts, nvir, nocc, nvir, nvir), dtype.char)
+            else:
+                log.info('oovv, ovov, voov, vovv integrals will be computed on the fly')
+                self.oovv = None
+                self.ovov = None
+                self.voov = None
+                self.vovv = None
 
             vvvv_required = ((not cc.direct)
                              # cc._scf.with_df needs to be df.GDF only (not MDF)
@@ -829,8 +846,10 @@ class _ERIS:  # (pyscf.cc.ccsd._ChemistsERIs):
                              # direct-vvvv for pbc-2D is not supported so far
                              or cell.dimension == 2)
             if vvvv_required:
-                self.vvvv = self.feri1.create_dataset('vvvv', (nkpts,nkpts,nkpts,nvir,nvir,nvir,nvir), dtype.char)
+                log.info('vvvv integrals will be computed explicitly')
+                self.vvvv = self.feri7.create_dataset('vvvv', (nkpts,nkpts,nkpts,nvir,nvir,nvir,nvir), dtype.char)
             else:
+                log.info('vvvv integrals will be computed on the fly')
                 self.vvvv = None
 
             # <ij|pq>  = (ip|jq)
@@ -848,26 +867,28 @@ class _ERIS:  # (pyscf.cc.ccsd._ChemistsERIs):
                         self.dtype = buf_kpt.dtype
                         self.oooo[kp, kr, kq, :, :, :, :] = buf_kpt[:, :, :nocc, :nocc] / nkpts
                         self.ooov[kp, kr, kq, :, :, :, :] = buf_kpt[:, :, :nocc, nocc:] / nkpts
-                        self.oovv[kp, kr, kq, :, :, :, :] = buf_kpt[:, :, nocc:, nocc:] / nkpts
+                        if self.oovv is not None:
+                            self.oovv[kp, kr, kq, :, :, :, :] = buf_kpt[:, :, nocc:, nocc:] / nkpts
             cput1 = log.timer_debug1('transforming oopq', *cput1)
 
             # <ia|pq> = (ip|aq)
-            cput1 = logger.process_clock(), logger.perf_counter()
-            for kp in range(nkpts):
-                for kq in range(nkpts):
-                    for kr in range(nkpts):
-                        ks = kconserv[kp, kq, kr]
-                        orbo_p = mo_coeff[kp][:, :nocc]
-                        orbv_r = mo_coeff[kr][:, nocc:]
-                        buf_kpt = fao2mo((orbo_p, mo_coeff[kq], orbv_r, mo_coeff[ks]),
-                                         (kpts[kp], kpts[kq], kpts[kr], kpts[ks]), compact=False)
-                        if mo_coeff[0].dtype == np.double: buf_kpt = buf_kpt.real
-                        buf_kpt = buf_kpt.reshape(nocc, nmo, nvir, nmo).transpose(0, 2, 1, 3)
-                        self.ovov[kp, kr, kq, :, :, :, :] = buf_kpt[:, :, :nocc, nocc:] / nkpts
-                        # TODO: compute vovv on the fly
-                        self.vovv[kr, kp, ks, :, :, :, :] = buf_kpt[:, :, nocc:, nocc:].transpose(1, 0, 3, 2) / nkpts
-                        self.voov[kr, kp, ks, :, :, :, :] = buf_kpt[:, :, nocc:, :nocc].transpose(1, 0, 3, 2) / nkpts
-            cput1 = log.timer_debug1('transforming ovpq', *cput1)
+            if all(x is not None for x in (self.ovov, self.voov, self.vovv)):
+                cput1 = logger.process_clock(), logger.perf_counter()
+                for kp in range(nkpts):
+                    for kq in range(nkpts):
+                        for kr in range(nkpts):
+                            ks = kconserv[kp, kq, kr]
+                            orbo_p = mo_coeff[kp][:, :nocc]
+                            orbv_r = mo_coeff[kr][:, nocc:]
+                            buf_kpt = fao2mo((orbo_p, mo_coeff[kq], orbv_r, mo_coeff[ks]),
+                                            (kpts[kp], kpts[kq], kpts[kr], kpts[ks]), compact=False)
+                            if mo_coeff[0].dtype == np.double: buf_kpt = buf_kpt.real
+                            buf_kpt = buf_kpt.reshape(nocc, nmo, nvir, nmo).transpose(0, 2, 1, 3)
+                            self.ovov[kp, kr, kq, :, :, :, :] = buf_kpt[:, :, :nocc, nocc:] / nkpts
+                            # TODO: compute vovv on the fly (SL: I am testing.)
+                            self.vovv[kr, kp, ks, :, :, :, :] = buf_kpt[:, :, nocc:, nocc:].transpose(1, 0, 3, 2) / nkpts
+                            self.voov[kr, kp, ks, :, :, :, :] = buf_kpt[:, :, nocc:, :nocc].transpose(1, 0, 3, 2) / nkpts
+                cput1 = log.timer_debug1('transforming ovpq', *cput1)
 
             ## Without k-point symmetry
             # cput1 = logger.process_clock(), logger.perf_counter()

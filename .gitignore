@@ -88,3 +88,5 @@ tmp/
 # mypy
 .mypy_cache/
 
+# hdf5
+*hdf5*

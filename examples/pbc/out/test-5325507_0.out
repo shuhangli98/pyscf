@@ -1,0 +1,1624 @@
+====================================================
+        Job ID is:         5325507
+        Job name is:       test
+        Hostname is:       worker7198
+        This dir is:       /mnt/home/sli11/source/pyscf/examples/pbc
+        CPUs per Task is:  96
+        Tasks per Node is: 1(x12)
+        Mem per CPU is:    
+        Mem per GPU is:    
+        Mem per node is:   1536000
+--------------------------------------------------------------------------
+Ignoring value for oob_tcp_if_exclude on worker7198 (10.250.112.0/20: Did not find interface matching this subnet).
+(You can safely ignore this message.)
+--------------------------------------------------------------------------
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+System: uname_result(system='Linux', node='worker7198', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7208', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+#INFO: **** input file is /mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py ****
+#!/usr/bin/env python
+
+'''
+Showing equivalence between the K-point CCSD and
+the gamma-point CCSD for a diamond lattice.
+'''
+
+from pyscf.pbc import gto, scf, mpicc
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+rank = comm.Get_rank()
+
+cell = gto.M(
+    unit = 'B',
+    a = [[ 0.,          3.37013733,  3.37013733],
+         [ 3.37013733,  0.,          3.37013733],
+         [ 3.37013733,  3.37013733,  0.        ]],
+    mesh = [24,]*3,
+    atom = '''C 0 0 0
+              C 1.68506866 1.68506866 1.68506866''',
+    basis = 'gth-szv',
+    pseudo = 'gth-pade',
+    verbose = 4,
+)
+
+nk = [2,2,2]
+kpts = cell.make_kpts(nk)
+
+#
+# Running HF
+#
+kpts -= kpts[0]
+kmf = scf.KRHF(cell, kpts)
+if rank == 0:
+    kmf.kernel()
+
+comm.Barrier()
+mo_coeff  = comm.bcast(kmf.mo_coeff,root=0)
+mo_energy = comm.bcast(kmf.mo_energy,root=0)
+mo_occ    = comm.bcast(kmf.mo_occ,root=0)
+kpts      = comm.bcast(kmf.kpts,root=0)
+kmf.mo_coeff = mo_coeff
+kmf.mo_energy = mo_energy
+kmf.mo_occ = mo_occ
+kmf.kpts   = kpts
+comm.Barrier()
+
+#
+# Running CCSD
+#
+kcc = mpicc.KRCCSD(kmf)
+ecc, t1, t2 = kcc.kernel()
+if rank == 0:
+    print("cc energy (per unit cell) = %.17g" % ecc)
+# Running EACCSD and EACCSD*
+lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+kcc.eaccsd_star_contract(ew, ev, lev)
+
+# Running IPCCSD and IPCCSD*
+lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+kcc.ipccsd_star_contract(ew, ev, lev)
+#INFO: ******************** input file end ********************
+
+
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.14
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+System: uname_result(system='Linux', node='worker7201', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7202', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7206', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7207', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7204', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.21
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+System: uname_result(system='Linux', node='worker7209', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7199', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+System: uname_result(system='Linux', node='worker7205', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+System: uname_result(system='Linux', node='worker7200', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[ENV] PYSCF_TMPDIR /tmp
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+System: uname_result(system='Linux', node='worker7203', release='6.1.134.1.fi', version='#1 SMP Thu Apr 24 11:49:26 EDT 2025', machine='x86_64')  Threads 96
+Python 3.10.13 (main, May  1 2024, 20:55:07) [GCC 11.4.0]
+numpy 1.26.4  scipy 1.13.0  h5py 3.11.0
+Date: Wed Sep 17 01:12:40 2025
+PySCF version 2.10.0
+PySCF path  /mnt/home/sli11/source/pyscf
+GIT HEAD (branch nodirect) 6f9d9399cac057e5965e8250cf8e3ef57716510d
+
+[ENV] PYSCF_TMPDIR /tmp
+[CONFIG] conf_file None
+[INPUT] verbose = 4
+[INPUT] num. atoms = 2
+[INPUT] num. electrons = 8
+[INPUT] charge = 0
+[INPUT] spin (= nelec alpha-beta = 2S) = 0
+[INPUT] symmetry False subgroup None
+[INPUT] Mole.unit = B
+[INPUT] Symbol           X                Y                Z      unit          X                Y                Z       unit  Magmom
+[INPUT]  1 C      0.000000000000   0.000000000000   0.000000000000 AA    0.000000000000   0.000000000000   0.000000000000 Bohr   0.0
+[INPUT]  2 C      0.891699933708   0.891699933708   0.891699933708 AA    1.685068660000   1.685068660000   1.685068660000 Bohr   0.0
+
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.11
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.13
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+nuclear repulsion = -12.7871300583275rcut = 21.31940052177759 (nimgs = [6 6 6])
+number of shells = 4nuclear repulsion = -12.7871300583275
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.16
+
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+
+dimension = 3
+number of shells = 4number of NR pGTOs = 32low_dim_ft_type = None
+
+Cell volume = 76.5549
+number of NR cGTOs = 8
+number of NR pGTOs = 32
+number of NR cGTOs = 8rcut = 21.31940052177759 (nimgs = [6 6 6])
+
+
+basis = gth-szvbasis = gth-szv
+
+ecp = {}ecp = {}
+CPU time:         1.19
+
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+CPU time:         1.50                 a2 [3.370137330, 0.000000000, 3.370137330]
+
+                 a3 [3.370137330, 3.370137330, 0.000000000]lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+
+dimension = 3                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+low_dim_ft_type = None
+
+dimension = 3lattice sum = 767 cells
+
+low_dim_ft_type = Noneprecision = 1e-08Cell volume = 76.5549
+
+
+pseudo = gth-padeCell volume = 76.5549
+
+lattice sum = 767 cells
+mesh = [24, 24, 24] (13824 PWs)
+precision = 1e-08
+pseudo = gth-pade
+rcut = 21.31940052177759 (nimgs = [6 6 6])mesh = [24, 24, 24] (13824 PWs)
+
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+
+lattice sum = 767 cellslattice sum = 767 cells
+
+precision = 1e-08precision = 1e-08
+
+pseudo = gth-padepseudo = gth-pade
+
+mesh = [24, 24, 24] (13824 PWs)mesh = [24, 24, 24] (13824 PWs)
+
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.13
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+nuclear repulsion = -12.7871300583275ecp = {}
+CPU time:         1.15
+
+number of shells = 4
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]number of NR pGTOs = 32
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+number of NR cGTOs = 8
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+basis = gth-szv
+ecp = {}
+
+dimension = 3CPU time:         1.13
+low_dim_ft_type = None
+
+Cell volume = 76.5549lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         1.42
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+nuclear repulsion = -12.7871300583275
+number of shells = 4
+number of NR pGTOs = 32
+number of NR cGTOs = 8
+basis = gth-szv
+ecp = {}
+CPU time:         2.35
+lattice vectors  a1 [0.000000000, 3.370137330, 3.370137330]
+                 a2 [3.370137330, 0.000000000, 3.370137330]
+                 a3 [3.370137330, 3.370137330, 0.000000000]
+dimension = 3
+low_dim_ft_type = None
+Cell volume = 76.5549
+rcut = 21.31940052177759 (nimgs = [6 6 6])
+lattice sum = 767 cells
+precision = 1e-08
+pseudo = gth-pade
+mesh = [24, 24, 24] (13824 PWs)
+    = ke_cutoff [105.14531321 105.14531321 105.14531321]
+
+
+******** <class 'pyscf.pbc.scf.khf.KRHF'> ********
+method = KRHF
+initial guess = minao
+damping factor = 0
+level_shift factor = 0
+DIIS = <class 'pyscf.scf.diis.CDIIS'>
+diis_start_cycle = 1
+diis_space = 8
+diis_damp = 0
+SCF conv_tol = 1e-07
+SCF conv_tol_grad = None
+SCF max_cycles = 50
+direct_scf = True
+direct_scf_tol = 1e-13
+chkfile to save SCF result = /tmp/tmp18td37_o
+max_memory 4000 MB (current use 223 MB)
+
+
+******** PBC SCF flags ********
+N kpts = 8
+Exchange divergence treatment (exxdiv) = ewald
+    madelung (= occupied orbital energy shift) = 0.34010943955463485
+    Total energy shift due to Ewald probe charge = -1/2 * Nelec*madelung = -1.36043775822
+DF object = <pyscf.pbc.df.fft.FFTDF object at 0x15552fb4a470>
+Set gradient conv threshold to 0.000316228
+init E= -12.4360628345328
+HOMO = 0.622047918488  LUMO = 0.919883593458
+cycle= 1 E= -10.9266572079759  delta_E= 1.51  |g|= 0.284  |ddm|= 10.2
+HOMO = 0.340775637283  LUMO = 1.01007478446
+cycle= 2 E= -10.9305707973702  delta_E= -0.00391  |g|= 0.0708  |ddm|= 0.447
+HOMO = 0.338316044848  LUMO = 1.00825808396
+cycle= 3 E= -10.9308571139845  delta_E= -0.000286  |g|= 0.00462  |ddm|= 0.15
+HOMO = 0.33827684363  LUMO = 1.00805158566
+cycle= 4 E= -10.9308583360219  delta_E= -1.22e-06  |g|= 5.75e-05  |ddm|= 0.00986
+HOMO = 0.338268569774  LUMO = 1.00804630883
+cycle= 5 E= -10.9308583362043  delta_E= -1.82e-10  |g|= 2.82e-06  |ddm|= 0.000115
+HOMO = 0.338270358798  LUMO = 1.00804715788
+Extra cycle  E= -10.9308583362048  delta_E= -4.58e-13  |g|= 7.8e-07  |ddm|= 4.89e-06
+converged SCF energy = -10.9308583362048
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_energy_diff = 1e+09
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+
+******** <class 'pyscf.pbc.mpicc.kccsd_rhf.RCCSD'> ********
+CC2 = 0
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+max_memory 4000 MB (current use 243 MB)
+diis_start_energy_diff = 1e+09
+
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0max_memory 4000 MB (current use 243 MB)
+max_memory 4000 MB (current use 243 MB)
+max_memory 4000 MB (current use 243 MB)
+max_memory 4000 MB (current use 243 MB)
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+max_memory 4000 MB (current use 243 MB)
+max_memory 4000 MB (current use 243 MB)
+
+diis_start_energy_diff = 1e+09
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09
+CCSD nocc = 4, nmo = 8
+max_cycle = 50
+direct = 1
+conv_tol = 1e-07
+conv_tol_normt = 1e-05
+diis_space = 6
+diis_start_cycle = 0
+diis_start_energy_diff = 1e+09max_memory 4000 MB (current use 243 MB)
+max_memory 4000 MB (current use 243 MB)
+
+max_memory 4000 MB (current use 243 MB)
+max_memory 4000 MB (current use 501 MB)
+max_memory 4000 MB (current use 243 MB)
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+
+WARN: using oovv integrals in memory
+
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 53, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 53, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 53, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 53, in <module>
+    ecc, t1, t2 = kcc.kernel()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 604, in kernel
+    ecc, t1, t2 = kcc.kernel()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 604, in kernel
+    ecc, t1, t2 = kcc.kernel()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 604, in kernel
+    ecc, t1, t2 = kcc.kernel()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 604, in kernel
+    return self.ccsd(t1, t2, eris, mbpt2=mbpt2)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 626, in ccsd
+    kernel(self, eris, t1, t2, max_cycle=self.max_cycle,
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 50, in kernel
+    return self.ccsd(t1, t2, eris, mbpt2=mbpt2)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 626, in ccsd
+    kernel(self, eris, t1, t2, max_cycle=self.max_cycle,
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 50, in kernel
+    return self.ccsd(t1, t2, eris, mbpt2=mbpt2)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 626, in ccsd
+    kernel(self, eris, t1, t2, max_cycle=self.max_cycle,
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 50, in kernel
+    return self.ccsd(t1, t2, eris, mbpt2=mbpt2)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/cc/kccsd_rhf.py", line 626, in ccsd
+    kernel(self, eris, t1, t2, max_cycle=self.max_cycle,
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 50, in kernel
+    t1, t2 = mycc.get_init_guess(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 1049, in get_init_guess
+    return self.init_amps(eris)[1:]
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1138, in init_amps
+    return self._init_amps_tril(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1036, in _init_amps_tril
+    good2go, data = loader.slave_set()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpitools/mpi_load_balancer.py", line 138, in slave_set
+    t1, t2 = mycc.get_init_guess(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 1049, in get_init_guess
+    return self.init_amps(eris)[1:]
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1138, in init_amps
+    t1, t2 = mycc.get_init_guess(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 1049, in get_init_guess
+    return self._init_amps_tril(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1036, in _init_amps_tril
+    t1, t2 = mycc.get_init_guess(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/cc/ccsd.py", line 1049, in get_init_guess
+    good2go, data = loader.slave_set()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpitools/mpi_load_balancer.py", line 138, in slave_set
+    return self.init_amps(eris)[1:]
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1138, in init_amps
+    return self.init_amps(eris)[1:]
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1138, in init_amps
+    return self._init_amps_tril(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1036, in _init_amps_tril
+    return self._init_amps_tril(eris)
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpicc/kccsd_rhf.py", line 1036, in _init_amps_tril
+    good2go, data = loader.slave_set()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpitools/mpi_load_balancer.py", line 138, in slave_set
+    good2go, data = loader.slave_set()
+  File "/mnt/home/sli11/source/pyscf/pyscf/pbc/mpitools/mpi_load_balancer.py", line 138, in slave_set
+    workingBlock = self.COMM.recv(source=0, tag=tags.WORK)
+  File "mpi4py/MPI/Comm.pyx", line 1438, in mpi4py.MPI.Comm.recv
+    workingBlock = self.COMM.recv(source=0, tag=tags.WORK)
+  File "mpi4py/MPI/Comm.pyx", line 1438, in mpi4py.MPI.Comm.recv
+    workingBlock = self.COMM.recv(source=0, tag=tags.WORK)
+  File "mpi4py/MPI/Comm.pyx", line 1438, in mpi4py.MPI.Comm.recv
+    workingBlock = self.COMM.recv(source=0, tag=tags.WORK)
+  File "mpi4py/MPI/Comm.pyx", line 1438, in mpi4py.MPI.Comm.recv
+  File "mpi4py/MPI/msgpickle.pxi", line 341, in mpi4py.MPI.PyMPI_recv
+  File "mpi4py/MPI/msgpickle.pxi", line 306, in mpi4py.MPI.PyMPI_recv_match
+  File "mpi4py/MPI/msgpickle.pxi", line 152, in mpi4py.MPI.pickle_load
+  File "mpi4py/MPI/msgpickle.pxi", line 341, in mpi4py.MPI.PyMPI_recv
+  File "mpi4py/MPI/msgpickle.pxi", line 141, in mpi4py.MPI.cloads
+  File "mpi4py/MPI/msgpickle.pxi", line 341, in mpi4py.MPI.PyMPI_recv
+_pickle.UnpicklingError: invalid load key, '\x01'.
+  File "mpi4py/MPI/msgpickle.pxi", line 341, in mpi4py.MPI.PyMPI_recv
+  File "mpi4py/MPI/msgpickle.pxi", line 306, in mpi4py.MPI.PyMPI_recv_match
+  File "mpi4py/MPI/msgpickle.pxi", line 306, in mpi4py.MPI.PyMPI_recv_match
+  File "mpi4py/MPI/msgpickle.pxi", line 152, in mpi4py.MPI.pickle_load
+  File "mpi4py/MPI/msgpickle.pxi", line 152, in mpi4py.MPI.pickle_load
+  File "mpi4py/MPI/msgpickle.pxi", line 141, in mpi4py.MPI.cloads
+  File "mpi4py/MPI/msgpickle.pxi", line 141, in mpi4py.MPI.cloads
+  File "mpi4py/MPI/msgpickle.pxi", line 306, in mpi4py.MPI.PyMPI_recv_match
+_pickle.UnpicklingError: invalid load key, '\x00'.
+  File "mpi4py/MPI/msgpickle.pxi", line 152, in mpi4py.MPI.pickle_load
+_pickle.UnpicklingError: invalid load key, '\x00'.
+  File "mpi4py/MPI/msgpickle.pxi", line 141, in mpi4py.MPI.cloads
+_pickle.UnpicklingError: invalid load key, '\x00'.
+slurmstepd: error: *** JOB 5325507 ON worker7198 CANCELLED AT 2025-09-17T01:18:25 ***

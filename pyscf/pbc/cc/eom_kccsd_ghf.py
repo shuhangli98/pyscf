@@ -615,8 +615,8 @@ def ipccsd(eom, nroots=1, koopmans=False, guess=None, left=False,
     if partition:
         eom.partition = partition.lower()
         assert eom.partition in ['mp','full']
-        if eom.partition in ['mp', 'full']:
-            raise NotImplementedError
+        # if eom.partition in ['mp', 'full']:
+        #     raise NotImplementedError
     eom.converged, eom.e, eom.v \
             = kernel(eom, nroots, koopmans, guess, left, eris=eris, imds=imds,
                      partition=partition, kptlist=kptlist, dtype=dtype)

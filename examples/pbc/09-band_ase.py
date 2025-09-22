@@ -25,7 +25,11 @@ X = points['X']
 W = points['W']
 K = points['K']
 L = points['L']
-band_kpts, kpath, sp_points = get_bandpath([L, G, X, W, K, G], c.cell, npoints=50)
+
+path = get_bandpath([L, G, X, W, K, G], c.cell, npoints=50)
+band_kpts = path.kpts
+kpath, sp_points, _  = path.get_linear_kpoint_axis()
+# band_kpts, kpath, sp_points = get_bandpath([L, G, X, W, K, G], c.cell, npoints=50)
 band_kpts = cell.get_abs_kpts(band_kpts)
 
 #
@@ -75,5 +79,5 @@ plt.xticks(sp_points, ['$%s$' % n for n in ['L', r'\Gamma', 'X', 'W', 'K', r'\Ga
 plt.axis(xmin=0, xmax=sp_points[-1], ymin=emin, ymax=emax)
 plt.xlabel('k-vector')
 
-plt.show()
+plt.savefig('band_ase.png', dpi=300)
 

@@ -50,15 +50,16 @@ comm.Barrier()
 # Running CCSD
 #
 kcc = mpicc.KRCCSD(kmf)
+kcc.max_memory = 1400000
 ecc, t1, t2 = kcc.kernel()
 if rank == 0:
     print("cc energy (per unit cell) = %.17g" % ecc)
-# Running EACCSD and EACCSD*
-lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
-ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
-kcc.eaccsd_star_contract(ew, ev, lev)
+# # Running EACCSD and EACCSD*
+# lew, lev = kcc.leaccsd(nroots=1, kptlist=[0])
+# ew, ev   = kcc.eaccsd(nroots=1,  kptlist=[0])
+# kcc.eaccsd_star_contract(ew, ev, lev)
 
-# Running IPCCSD and IPCCSD*
-lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
-ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
-kcc.ipccsd_star_contract(ew, ev, lev)
+# # Running IPCCSD and IPCCSD*
+# lew, lev = kcc.lipccsd(nroots=1, kptlist=[0])
+# ew, ev   = kcc.ipccsd(nroots=1,  kptlist=[0])
+# kcc.ipccsd_star_contract(ew, ev, lev)

@@ -35,7 +35,7 @@ def unpack_tril(in_array,nkpts,kp,kq,kr,ks):
     not_tril = numpy.array([x[0]>x[1] for x in indices])
     if sum(not_tril) == 0: # check if lower triangular
         indices = [tril_index(indices[:,0],indices[:,1]),indices[:,2]]
-        tmp = in_array[indices].copy()
+        tmp = in_array[tuple(indices)].copy()
         if nints == 3:
             tmp = tmp.reshape(in_array.shape[2:7])
         return tmp
@@ -45,7 +45,7 @@ def unpack_tril(in_array,nkpts,kp,kq,kr,ks):
 
     indices = [tril_index(indices[:,0],indices[:,1]),indices[:,2]]
 
-    tmp = in_array[indices].copy()
+    tmp = in_array[tuple(indices)].copy()
     tmp[not_tril] = tmp[not_tril].transpose(0,2,1,4,3)
     if nints == 3:
         tmp = tmp.reshape(in_array.shape[2:7])

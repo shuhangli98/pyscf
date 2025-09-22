@@ -77,14 +77,19 @@ def transform_integrals_outcore(myadc):
     eris = lambda:None
 
     eris.feri1 = lib.H5TmpFile()
+    eris.feri2 = lib.H5TmpFile()
+    eris.feri3 = lib.H5TmpFile()
+    eris.feri4 = lib.H5TmpFile()
+    eris.feri5 = lib.H5TmpFile()
+    
     eris.oooo = eris.feri1.create_dataset('oooo', (nocc,nocc,nocc,nocc), 'f8')
-    eris.oovv = eris.feri1.create_dataset(
+    eris.oovv = eris.feri2.create_dataset(
         'oovv', (nocc,nocc,nvir,nvir), 'f8', chunks=(nocc,nocc,1,nvir))
-    eris.ovoo = eris.feri1.create_dataset(
+    eris.ovoo = eris.feri3.create_dataset(
         'ovoo', (nocc,nvir,nocc,nocc), 'f8', chunks=(nocc,1,nocc,nocc))
-    eris.ovvo = eris.feri1.create_dataset(
+    eris.ovvo = eris.feri4.create_dataset(
         'ovvo', (nocc,nvir,nvir,nocc), 'f8', chunks=(nocc,1,nvir,nocc))
-    eris.ovvv = eris.feri1.create_dataset('ovvv', (nocc,nvir,nvpair), 'f8')
+    eris.ovvv = eris.feri5.create_dataset('ovvv', (nocc,nvir,nvpair), 'f8')
 
     eris.vvvv = None
 

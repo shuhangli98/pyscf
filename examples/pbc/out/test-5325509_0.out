@@ -1,0 +1,73 @@
+====================================================
+        Job ID is:         5325509
+        Job name is:       test
+        Hostname is:       worker7156
+        This dir is:       /mnt/home/sli11/source/pyscf/examples/pbc
+        CPUs per Task is:  96
+        Tasks per Node is: 1(x12)
+        Mem per CPU is:    
+        Mem per GPU is:    
+        Mem per node is:   1536000
+--------------------------------------------------------------------------
+Ignoring value for oob_tcp_if_exclude on worker7156 (10.250.112.0/20: Did not find interface matching this subnet).
+(You can safely ignore this message.)
+--------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+    from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+    from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+--------------------------------------------------------------------------
+Primary job  terminated normally, but 1 process returned
+a non-zero exit code. Per user-direction, the job has been aborted.
+--------------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+    from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+Traceback (most recent call last):
+  File "/mnt/home/sli11/source/pyscf/examples/pbc/25-k_points_mpi_ccsd.py", line 9, in <module>
+    from mpi4py import MPI
+    from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+    from mpi4py import MPI
+    from mpi4py import MPI
+    from mpi4py import MPI
+    from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+    from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+    from mpi4py import MPI
+ModuleNotFoundError:     from mpi4py import MPI
+ModuleNotFoundError: No module named 'mpi4py'
+ModuleNotFoundError: No module named 'mpi4py'
+No module named 'mpi4py'
+ModuleNotFoundError: No module named 'mpi4py'
+ModuleNotFoundError: No module named 'mpi4py'
+ModuleNotFoundError: No module named 'mpi4py'
+--------------------------------------------------------------------------
+orterun detected that one or more processes exited with non-zero status, thus causing
+the job to be terminated. The first process to do so was:
+
+  Process name: [[60938,1],1]
+  Exit code:    1
+--------------------------------------------------------------------------
