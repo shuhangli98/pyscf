@@ -259,7 +259,7 @@ def _update_amps_mpi(cc, t1, t2, eris):
     
     Woooo = None
 
-    add_vvvv_(cc, t2new, t1, t2, eris)
+    add_vvvv_mpi_(cc, t2new, t1, t2, eris)
 
     def _t2_voov1(ki,kj,ka,kb):
         t2new_tmp = einsum('ac,ijcb->ijab', Lvv[ka], t2[ki, kj, ka])
@@ -663,7 +663,78 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
             return Wvvvv
     elif (cc.incore_complete or
           _memory_4d(cc, [nvir,]*4) + mem_now < cc.max_memory * .9):
-        logger.info(cc, "SL DEBUG: Wvvvv incore")
+        _Wvvvv = imdk.cc_Wvvvv(kpts, kqrts, t1, t2, eris, rmat)
+
+        mem_now = lib.current_memory()[0]
+        if (not cc.ktensor_direct and
+            _memory_4d(cc, [nvir,]*4, False) + mem_now < cc.max_memory * .9):
+            _Wvvvv = _Wvvvv.todense()
+
+        get_Wvvvv = lambda ka, kb, kc: _Wvvvv[ka, kb, kc]
+    else:
+        metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
+                    'label': 'vvvv', 'trans': 'ccnn',
+                    'incore': False, 'prefix':'Wvvvv'}
+        _Wvvvv = ktensor.empty([nvir,]*4, dtype=t1.dtype, metadata=metadata)
+        _Wvvvv = imdk.cc_Wvvvv(kpts, kqrts, t1, t2, eris, rmat, _Wvvvv)
+
+        mem_now = lib.current_memory()[0]
+        if (not cc.ktensor_direct and
+            _memory_4d(cc, [nvir,]*4, False) + mem_now < cc.max_memory * .9):
+            _Wvvvv = _Wvvvv.todense()
+
+        get_Wvvvv = lambda ka, kb, kc: _Wvvvv[ka, kb, kc]
+
+    kakb, igroup = np.unique(kqrts.kqrts_ibz[:,2:], axis=0, return_inverse=True)
+    igroup = igroup.ravel()
+    for i in range(np.amax(igroup) + 1):
+        ka, kb = kakb[i]
+        idx = np.where(igroup==i)[0]
+
+        for kc in range(nkpts):
+            kd = kconserv[ka, kc, kb]
+            Wvvvv = get_Wvvvv(ka, kb, kc)
+            for m in idx:
+                ki,kj,kaa,kbb = kqrts.kqrts_ibz[m]
+                assert kaa==ka and kbb==kb
+                tau = t2[ki, kj, kc].copy()
+                if ki == kc and kj == kd:
+                    tau += np.einsum('ic,jd->ijcd', t1[ki], t1[kj])
+                Ht2[ki, kj, ka] += einsum('abcd,ijcd->ijab', Wvvvv, tau)
+
+    _Wvvvv = None
+    return Ht2
+
+def add_vvvv_mpi_(cc, Ht2, t1, t2, eris):
+    kpts = cc.kpts
+    kqrts = cc.kqrts
+    rmat = cc.rmat
+
+    nocc = cc.nocc
+    nmo = cc.nmo
+    nvir = nmo - nocc
+    nkpts = kpts.nkpts
+    kconserv = cc.khelper.kconserv
+
+    mem_now = lib.current_memory()[0]
+    if (not cc.incore_complete and
+        cc.direct and getattr(eris, 'Lpv', None) is not None):
+        logger.info(cc, "SL DEBUG: Wvvvv direct (no full tensor)")
+        def get_Wvvvv(ka, kb, kc):
+            Lpv = eris.Lpv
+            kd = kconserv[ka, kc, kb]
+            Lbd = (Lpv[kb,kd][:,nocc:] -
+                   lib.einsum('Lkd,kb->Lbd', Lpv[kb,kd][:,:nocc], t1[kb]))
+            Wvvvv = lib.einsum('Lac,Lbd->abcd', Lpv[ka,kc][:,nocc:], Lbd)
+            Lbd = None
+            kcbd = lib.einsum('Lkc,Lbd->kcbd', Lpv[ka,kc][:,:nocc],
+                              Lpv[kb,kd][:,nocc:])
+            Wvvvv -= lib.einsum('kcbd,ka->abcd', kcbd, t1[ka])
+            Wvvvv *= (1. / nkpts)
+            return Wvvvv
+    elif (cc.incore_complete or
+          _memory_4d(cc, [nvir,]*4) + mem_now < cc.max_memory * .9):
+        logger.info(cc, "SL DEBUG: Wvvvv incore (full tensor)")
         _Wvvvv = imdk.cc_Wvvvv(kpts, kqrts, t1, t2, eris, rmat)
 
         mem_now = lib.current_memory()[0]
@@ -715,6 +786,65 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
         
     _Wvvvv = None
     return Ht2
+
+def energy_mpi(cc, t1, t2, eris):
+    logger.info(cc, 'SL DEBUG: Before energy. Current use %d MB', lib.current_memory()[0])
+    kpts = cc.kpts
+    kqrts = cc.kqrts
+
+    nkpts, nocc, nvir = t1.shape
+    fock = eris.fock
+    e = np.array(0.0,dtype=np.complex128)
+    
+    nibz = kpts.nkpts_ibz
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    loader.set_ranges((range(nibz),))
+    good2go = True
+    while (good2go):
+        good2go, data = loader.slave_set()
+        if good2go is False:
+            break
+        ranges0 = loader.get_blocks_from_data(data)
+        for ki_ibz in ranges0:
+            ki = kpts.ibz2bz[ki_ibz]
+            weight = kpts.weights_ibz[ki_ibz]
+            e += 2 * einsum('ia,ia', fock[ki,:nocc,nocc:], t1[ki]) * weight
+        loader.slave_finished()
+    
+    tau = ktensor.zeros_like(t2)
+    kq_weights = kqrts.weights_ibz
+    nibz = len(kqrts.kqrts_ibz)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    loader.set_ranges((range(nibz),))
+    good2go = True
+    while (good2go):
+        good2go, data = loader.slave_set()
+        if good2go is False:
+            break
+        ranges0 = loader.get_blocks_from_data(data)
+        for i in ranges0:
+            kq = kqrts.kqrts_ibz[i]
+            ki, kj, ka, kb = kq
+            tau[ki, kj, ka] = t2[ki, kj, ka]
+            if ki == ka and kj == kb:
+                tau[ki, kj, ka] += einsum('ia,jb->ijab', t1[ki], t1[kj])
+        
+        for k in ranges0:
+            kq = kqrts.kqrts_ibz[k]
+            ki, kj, ka, kb = kq
+            weight = kq_weights[k] * nkpts**3
+            e += 2 * einsum('ijab,ijab', tau[ki, kj, ka], eris.oovv[ki, kj, ka]) * weight
+            e -= einsum('ijab,ijba', tau[ki, kj, ka], eris.oovv[ki, kj, kb]) * weight
+        loader.slave_finished()
+    comm.Barrier()
+    comm.Allreduce(MPI.IN_PLACE, e, op=MPI.SUM)
+
+    
+    e /= nkpts
+    if abs(e.imag) > 1e-4:
+        logger.warn(cc, 'Non-zero imaginary part found in KRCCSD energy %s', e)
+    logger.info(cc, 'SL DEBUG: After energy. Current use %d MB', lib.current_memory()[0])
+    return e.real
 
 def energy(cc, t1, t2, eris):
     logger.info(cc, 'SL DEBUG: Before energy. Current use %d MB', lib.current_memory()[0])
@@ -949,12 +1079,6 @@ class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
             return self._init_amps_mpi(eris) 
         return self._init_amps(eris)
     
-    # def init_amps(self, eris):
-    #     return self._init_amps_mpi(eris) if self.do_mpi else self._init_amps(eris)
-    
-    
-########################################################
-##### Copied from Ksymm
     
     def amplitudes_to_vector(self, t1, t2):
         t1_raw = np.asarray(getattr(t1, 'data', t1))
@@ -982,7 +1106,10 @@ class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
                              metadata=metadata)
         return t1, t2
 
-    energy = energy
+    def energy(self, t1, t2, eris):
+        if getattr(self, "do_mpi", True):
+            return energy_mpi(self, t1, t2, eris)
+        return energy(self, t1, t2, eris)
     
     def update_amps(self, t1, t2, eris):
         if getattr(self, "do_mpi", True):
