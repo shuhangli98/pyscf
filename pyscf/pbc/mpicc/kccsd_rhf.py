@@ -84,87 +84,72 @@ def _update_amps_mpi(cc, t1, t2, eris):
     
     # T1 equation
     nibz = kpts.nkpts_ibz
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for ka_ibz in ranges0:
-            ki = ka = kpts.ibz2bz[ka_ibz]
-            t1new[ka]  = fov[ka].conj()
-            t1new[ka] += -2. * einsum('kc,ka,ic->ia', fov[ki], t1[ka], t1[ki])
-            t1new[ka] += einsum('ac,ic->ia', Fvv[ka], t1[ki])
-            t1new[ka] += -einsum('ki,ka->ia', Foo[ki], t1[ka])
-        loader.slave_finished()
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for ka_ibz in range(xstart, xend):
+        ki = ka = kpts.ibz2bz[ka_ibz]
+        t1new[ka]  = fov[ka].conj()
+        t1new[ka] += -2. * einsum('kc,ka,ic->ia', fov[ki], t1[ka], t1[ki])
+        t1new[ka] += einsum('ac,ic->ia', Fvv[ka], t1[ki])
+        t1new[ka] += -einsum('ki,ka->ia', Foo[ki], t1[ka])
     comm.Barrier()
     
     nibz = len(kqrts.kqrts_ibz)
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kk, kc, kd = kq
-            ka = ki
-            Svovv = 2 * eris.vovv[ka, kk, kc] - eris.vovv[ka, kk, kd].transpose(0, 1, 3, 2)
-            tau_term_1 = t2[ki, kk, kc].copy()
-            if ki == kc and kk == kd:
-                tau_term_1 += einsum('ic,kd->ikcd', t1[ki], t1[kk])
-            fock = einsum('akcd,ikcd->ia', Svovv, tau_term_1)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kk, kc, kd = kq
+        ka = ki
+        Svovv = 2 * eris.vovv[ka, kk, kc] - eris.vovv[ka, kk, kd].transpose(0, 1, 3, 2)
+        tau_term_1 = t2[ki, kk, kc].copy()
+        if ki == kc and kk == kd:
+            tau_term_1 += einsum('ic,kd->ikcd', t1[ki], t1[kk])
+        fock = einsum('akcd,ikcd->ia', Svovv, tau_term_1)
+        for _, iop in kqrts.loop_stabilizer(i):
+            rmat_oo = rmat.oo[ka][iop]
+            rmat_vv = rmat.vv[ka][iop]
+            t1new[ka] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
+                
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        kk, kl, ki, kc = kq
+        ka = ki
+        Sooov = 2 * eris.ooov[kk, kl, ki] - eris.ooov[kl, kk, ki].transpose(1, 0, 2, 3)
+        tau_term_1 = t2[kk, kl, ka].copy()
+        if kk == ka and kl == kc:
+            tau_term_1 += einsum('ka,lc->klac', t1[ka], t1[kc])
+        fock = -einsum('klic,klac->ia', Sooov, tau_term_1)
+        
+        op_group = kqrts.stars_ops[i]
+        ka_prim = kpts.k2opk[ka, op_group]
+        mask = np.isin(ka_prim, ki_ibz_bz)
+        for iop, ka_p in zip(op_group[mask], ka_prim[mask]):
+            rmat_oo = rmat.oo[ka][iop]
+            rmat_vv = rmat.vv[ka][iop]
+            t1new[ka_p] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
+        
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kk, ka, kc = kq
+        if ka == ki and kk == kc:
+            tau_term = 2 * t2[kk, ki, kk] - t2[ki, kk, kk].transpose(1, 0, 2, 3)
+            if ki == kk:
+                tau_term += einsum('ic,ka->kica', t1[ki], t1[ka])
+
+            fock = einsum('kc,kica->ia', Fov[kc], tau_term)
+            fock += einsum('akic,kc->ia', 2 * eris.voov[ka, kk, ki], t1[kc])
+            fock += einsum('kaic,kc->ia', -eris.ovov[kk, ka, ki], t1[kc])
+
             for _, iop in kqrts.loop_stabilizer(i):
                 rmat_oo = rmat.oo[ka][iop]
                 rmat_vv = rmat.vv[ka][iop]
                 t1new[ka] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
                 
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            kk, kl, ki, kc = kq
-            ka = ki
-            Sooov = 2 * eris.ooov[kk, kl, ki] - eris.ooov[kl, kk, ki].transpose(1, 0, 2, 3)
-            tau_term_1 = t2[kk, kl, ka].copy()
-            if kk == ka and kl == kc:
-                tau_term_1 += einsum('ka,lc->klac', t1[ka], t1[kc])
-            fock = -einsum('klic,klac->ia', Sooov, tau_term_1)
-            
-            op_group = kqrts.stars_ops[i]
-            ka_prim = kpts.k2opk[ka, op_group]
-            mask = np.isin(ka_prim, ki_ibz_bz)
-            for iop, ka_p in zip(op_group[mask], ka_prim[mask]):
-                rmat_oo = rmat.oo[ka][iop]
-                rmat_vv = rmat.vv[ka][iop]
-                t1new[ka_p] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
-        
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kk, ka, kc = kq
-            if ka == ki and kk == kc:
-                tau_term = 2 * t2[kk, ki, kk] - t2[ki, kk, kk].transpose(1, 0, 2, 3)
-                if ki == kk:
-                    tau_term += einsum('ic,ka->kica', t1[ki], t1[ka])
-
-                fock = einsum('kc,kica->ia', Fov[kc], tau_term)
-                fock += einsum('akic,kc->ia', 2 * eris.voov[ka, kk, ki], t1[kc])
-                fock += einsum('kaic,kc->ia', -eris.ovov[kk, ka, ki], t1[kc])
-
-                for _, iop in kqrts.loop_stabilizer(i):
-                    rmat_oo = rmat.oo[ka][iop]
-                    rmat_vv = rmat.vv[ka][iop]
-                    t1new[ka] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
-        loader.slave_finished()
-    comm.Barrier()
     comm.Allreduce(MPI.IN_PLACE, t1new.data, op=MPI.SUM)
     
     for ki_ibz in range(kpts.nkpts_ibz):
@@ -180,21 +165,14 @@ def _update_amps_mpi(cc, t1, t2, eris):
     Lvv = Lvv.todense()
     
     nibz = len(kqrts.kqrts_ibz)
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kj, ka, kb = kq
-            t2new[ki, kj, ka] = eris.oovv[ki, kj, ka].conj()
-        loader.slave_finished()
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new[ki, kj, ka] = eris.oovv[ki, kj, ka].conj()
     comm.Barrier()
             
     mem_now = lib.current_memory()[0]
@@ -227,27 +205,20 @@ def _update_amps_mpi(cc, t1, t2, eris):
         return t2new_tmp
     
     nibz = len(kqrts.kqrts_ibz)
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kj, ka, kb = kq
-            t2new_tmp = _t2_oooo(ki,kj,ka,kb)
-            t2new[ki, kj, ka] += t2new_tmp
-            if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
-                t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
-            else:
-                t2new_tmp = _t2_oooo(kj,ki,kb,ka)
-                t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
-        loader.slave_finished()
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new_tmp = _t2_oooo(ki,kj,ka,kb)
+        t2new[ki, kj, ka] += t2new_tmp
+        if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
+            t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
+        else:
+            t2new_tmp = _t2_oooo(kj,ki,kb,ka)
+            t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
     comm.Barrier()
     
     Woooo = None
@@ -270,27 +241,20 @@ def _update_amps_mpi(cc, t1, t2, eris):
         return t2new_tmp
     
     nibz = len(kqrts.kqrts_ibz)
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kj, ka, kb = kq
-            t2new_tmp = _t2_voov1(ki,kj,ka,kb)
-            t2new[ki, kj, ka] += t2new_tmp
-            if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
-                t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
-            else:
-                t2new_tmp = _t2_voov1(kj,ki,kb,ka)
-                t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
-        loader.slave_finished()
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new_tmp = _t2_voov1(ki,kj,ka,kb)
+        t2new[ki, kj, ka] += t2new_tmp
+        if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
+            t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
+        else:
+            t2new_tmp = _t2_voov1(kj,ki,kb,ka)
+            t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
     comm.Barrier()    
         
     mem_now = lib.current_memory()[0]
@@ -332,28 +296,20 @@ def _update_amps_mpi(cc, t1, t2, eris):
         return t2new_tmp
 
     nibz = len(kqrts.kqrts_ibz)
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kj, ka, kb = kq
-            t2new_tmp = _t2_voov2(ki,kj,ka,kb)
-            t2new[ki, kj, ka] += t2new_tmp
-            if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
-                t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
-            else:
-                t2new_tmp = _t2_voov2(kj,ki,kb,ka)
-                t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
-        loader.slave_finished()
-    comm.Barrier()
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new_tmp = _t2_voov2(ki,kj,ka,kb)
+        t2new[ki, kj, ka] += t2new_tmp
+        if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
+            t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
+        else:
+            t2new_tmp = _t2_voov2(kj,ki,kb,ka)
+            t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
     comm.Allreduce(MPI.IN_PLACE, t2new.data, op=MPI.SUM)
     
     Wvoov = Wvovo = None
@@ -750,33 +706,27 @@ def add_vvvv_mpi_(cc, Ht2, t1, t2, eris):
 
     kakb, igroup = np.unique(kqrts.kqrts_ibz[:,2:], axis=0, return_inverse=True)
     igroup = igroup.ravel()
+    
+    base = nkpts // size
+    rem = nkpts % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    
     for i in range(np.amax(igroup) + 1):
         ka, kb = kakb[i]
         idx = np.where(igroup==i)[0]
         
-        # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nkpts,))
-        chunk = max(1, (nkpts + size - 1) // size)
-        loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-        loader.set_ranges((range(nkpts),))
-        good2go = True
-        while (good2go):
-            good2go, data = loader.slave_set()
-            if good2go is False:
-                break
-            ranges0 = loader.get_blocks_from_data(data)
-            for kc in ranges0:
-                kd = kconserv[ka, kc, kb]
-                Wvvvv = get_Wvvvv(ka, kb, kc)
-                for m in idx:
-                    ki,kj,kaa,kbb = kqrts.kqrts_ibz[m]
-                    assert kaa==ka and kbb==kb
-                    tau = t2[ki, kj, kc].copy()
-                    if ki == kc and kj == kd:
-                        tau += np.einsum('ic,jd->ijcd', t1[ki], t1[kj])
-                    Ht2[ki, kj, ka] += einsum('abcd,ijcd->ijab', Wvvvv, tau)
-            loader.slave_finished()
-        comm.Barrier()
-        
+        for kc in range(xstart, xend):
+            kd = kconserv[ka, kc, kb]
+            Wvvvv = get_Wvvvv(ka, kb, kc)
+            for m in idx:
+                ki,kj,kaa,kbb = kqrts.kqrts_ibz[m]
+                assert kaa==ka and kbb==kb
+                tau = t2[ki, kj, kc].copy()
+                if ki == kc and kj == kd:
+                    tau += np.einsum('ic,jd->ijcd', t1[ki], t1[kj])
+                Ht2[ki, kj, ka] += einsum('abcd,ijcd->ijab', Wvvvv, tau)
+    comm.Barrier()
     _Wvvvv = None
     return Ht2
 
@@ -787,61 +737,46 @@ def energy_mpi(cc, t1, t2, eris):
 
     nkpts, nocc, nvir = t1.shape
     fock = eris.fock
-    e = np.array(0.0,dtype=np.complex128)
+    e_tol = 0.0
+    e = 0.0
     
     nibz = kpts.nkpts_ibz
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for ki_ibz in ranges0:
-            ki = kpts.ibz2bz[ki_ibz]
-            weight = kpts.weights_ibz[ki_ibz]
-            e += 2 * einsum('ia,ia', fock[ki,:nocc,nocc:], t1[ki]) * weight
-        loader.slave_finished()
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for ki_ibz in range(xstart, xend):
+        ki = kpts.ibz2bz[ki_ibz]
+        weight = kpts.weights_ibz[ki_ibz]
+        e += 2 * einsum('ia,ia', fock[ki,:nocc,nocc:], t1[ki]) * weight
     
     tau = ktensor.zeros_like(t2)
-    kq_weights = kqrts.weights_ibz
     nibz = len(kqrts.kqrts_ibz)
-    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    chunk = max(1, (nibz + size - 1) // size)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kj, ka, kb = kq
-            tau[ki, kj, ka] = t2[ki, kj, ka]
-            if ki == ka and kj == kb:
-                tau[ki, kj, ka] += einsum('ia,jb->ijab', t1[ki], t1[kj])
-        
-        for k in ranges0:
-            kq = kqrts.kqrts_ibz[k]
-            ki, kj, ka, kb = kq
-            weight = kq_weights[k] * nkpts**3
-            e += 2 * einsum('ijab,ijab', tau[ki, kj, ka], eris.oovv[ki, kj, ka]) * weight
-            e -= einsum('ijab,ijba', tau[ki, kj, ka], eris.oovv[ki, kj, kb]) * weight
-        loader.slave_finished()
-    comm.Barrier()
-    comm.Allreduce(MPI.IN_PLACE, e, op=MPI.SUM)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        tau[ki, kj, ka] = t2[ki, kj, ka]
+        if ki == ka and kj == kb:
+            tau[ki, kj, ka] += einsum('ia,jb->ijab', t1[ki], t1[kj])
+            
+    kq_weights = kqrts.weights_ibz
+    for k in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[k]
+        ki, kj, ka, kb = kq
+        weight = kq_weights[k] * nkpts**3
+        e += 2 * einsum('ijab,ijab', tau[ki, kj, ka], eris.oovv[ki, kj, ka]) * weight
+        e -= einsum('ijab,ijba', tau[ki, kj, ka], eris.oovv[ki, kj, kb]) * weight
+    e_tol = comm.allreduce(e, op=MPI.SUM)
 
-    
-    e /= nkpts
-    if abs(e.imag) > 1e-4:
-        logger.warn(cc, 'Non-zero imaginary part found in KRCCSD energy %s', e)
+    e_tol /= nkpts
+    if abs(e_tol.imag) > 1e-4:
+        logger.warn(cc, 'Non-zero imaginary part found in KRCCSD energy %s', e_tol)
     logger.info(cc, 'SL DEBUG: After energy. Current use %d MB', lib.current_memory()[0])
-    return e.real
+    return e_tol.real
 
 def energy(cc, t1, t2, eris):
     logger.info(cc, 'SL DEBUG: Before energy. Current use %d MB', lib.current_memory()[0])
@@ -963,37 +898,30 @@ class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
         nonzero_opadding, nonzero_vpadding = padding_k_idx(self, kind="split")
 
         emp2 = 0.0
-        local_mp2 = np.array(0.0,dtype=np.complex128)
+        local_mp2 = 0.0
         nibz = len(kqrts.kqrts_ibz)
-        chunk = max(1, (nibz + size - 1) // size)
-        loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
-        loader.set_ranges((range(nibz),))
-
-        good2go = True
-        while (good2go):
-            good2go, data = loader.slave_set()
-            if good2go is False:
-                break
-            ranges0 = loader.get_blocks_from_data(data)
-            for i in ranges0:
-                ki, kj, ka, kb = kqrts.kqrts_ibz[i]
-                weight = kqrts.weights_ibz[i] * nkpts**3
-                eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
-                           [0,nvir,ka,mo_e_v,nonzero_vpadding],
-                           fac=[1.0,-1.0])
-                ejb = _get_epq([0,nocc,kj,mo_e_o,nonzero_opadding],
-                           [0,nvir,kb,mo_e_v,nonzero_vpadding],
-                           fac=[1.0,-1.0])
-                eijab = eia[:, None, :, None] + ejb[:, None, :]
-                eris_ijab = eris.oovv[ki, kj, ka]
-                eris_ijba = eris.oovv[ki, kj, kb]
-                t2[ki, kj, ka] = eris_ijab.conj() / eijab
-                woovv = 2 * eris_ijab - eris_ijba.transpose(0, 1, 3, 2)
-                local_mp2 += np.einsum('ijab,ijab', t2[ki, kj, ka], woovv) * weight
+        base = nibz // size
+        rem = nibz % size
+        xstart = rank * base + min(rank, rem)
+        xend = xstart + base + (1 if rank < rem else 0)
+        for i in range(xstart, xend):
+            ki, kj, ka, kb = kqrts.kqrts_ibz[i]
+            weight = kqrts.weights_ibz[i] * nkpts**3
+            eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
+                        [0,nvir,ka,mo_e_v,nonzero_vpadding],
+                        fac=[1.0,-1.0])
+            ejb = _get_epq([0,nocc,kj,mo_e_o,nonzero_opadding],
+                        [0,nvir,kb,mo_e_v,nonzero_vpadding],
+                        fac=[1.0,-1.0])
+            eijab = eia[:, None, :, None] + ejb[:, None, :]
+            eris_ijab = eris.oovv[ki, kj, ka]
+            eris_ijba = eris.oovv[ki, kj, kb]
+            t2[ki, kj, ka] = eris_ijab.conj() / eijab
+            woovv = 2 * eris_ijab - eris_ijba.transpose(0, 1, 3, 2)
+            local_energy = np.einsum('ijab,ijab', t2[ki, kj, ka], woovv) * weight
+            local_mp2 += local_energy
             
-            loader.slave_finished()
-            
-        comm.Allreduce(MPI.IN_PLACE, local_mp2, op=MPI.SUM)
+        emp2 = comm.allreduce(local_mp2, op=MPI.SUM)
         
         if self.t2_incore:
             # If in mem, gather the distributed amplitudes so every rank has the complete t2 tensor.
@@ -1005,7 +933,7 @@ class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
             logger.info(self, f"Rank {rank}: arrays match? {ok}")
 
         # safeAllreduceInPlace(comm, t2)
-        self.emp2 = local_mp2.real
+        self.emp2 = emp2.real
         self.emp2 /= nkpts
         
         if rank == 0:
@@ -1069,7 +997,6 @@ class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
         logger.info(self, 'SL DEBUG: After init_amps. Current use %d MB', lib.current_memory()[0])
         logger.info(self, 'Init t2, MP2 energy (with fock eigenvalue shift) = %.15g', self.emp2)
         logger.timer(self, 'init mp2', *time0)
-        
         return self.emp2, t1, t2
     
     def init_amps(self, eris):
