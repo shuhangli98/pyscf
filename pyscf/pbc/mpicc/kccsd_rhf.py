@@ -39,6 +39,7 @@ size = MPI.COMM_WORLD.Get_size()
 comm = MPI.COMM_WORLD
 
 def _update_amps_mpi(cc, t1, t2, eris):
+    time0 = logger.process_clock(), logger.perf_counter()
     logger.info(cc, 'SL DEBUG: Before update_amps. Current use %d MB', lib.current_memory()[0])
     kpts = cc.kpts
     kqrts = cc.kqrts
@@ -83,8 +84,8 @@ def _update_amps_mpi(cc, t1, t2, eris):
     
     # T1 equation
     nibz = kpts.nkpts_ibz
-    logger.info(cc, 'Length of nkpts_ibz %d', nibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     
     good2go = True
@@ -103,8 +104,9 @@ def _update_amps_mpi(cc, t1, t2, eris):
     comm.Barrier()
     
     nibz = len(kqrts.kqrts_ibz)
-    logger.info(cc, 'Length of kqrts_ibz %d', nibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     
     good2go = True
@@ -163,35 +165,24 @@ def _update_amps_mpi(cc, t1, t2, eris):
                     t1new[ka] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
         loader.slave_finished()
     comm.Barrier()
+    comm.Allreduce(MPI.IN_PLACE, t1new.data, op=MPI.SUM)
     
-    nibz = kpts.nkpts_ibz
-    logger.info(cc, 'Length of nkpts_ibz %d', nibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    loader.set_ranges((range(nibz),))
-    
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for ki_ibz in ranges0:
-            ka = ki = kpts.ibz2bz[ki_ibz]
-            # Remove zero/padded elements from denominator
-            eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
+    for ki_ibz in range(kpts.nkpts_ibz):
+        ka = ki = kpts.ibz2bz[ki_ibz]
+        # Remove zero/padded elements from denominator
+        eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
                        [0,nvir,ka,mo_e_v,nonzero_vpadding],
                        fac=[1.0,-1.0])
-            t1new[ki] /= eia
-        loader.slave_finished()
-    comm.Barrier()
-    comm.Allreduce(MPI.IN_PLACE, t1new.data, op=MPI.SUM)
+        t1new[ki] /= eia
             
     # T2 equation
     Loo = Loo.todense()
     Lvv = Lvv.todense()
     
     nibz = len(kqrts.kqrts_ibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     good2go = True
     while (good2go):
@@ -236,7 +227,9 @@ def _update_amps_mpi(cc, t1, t2, eris):
         return t2new_tmp
     
     nibz = len(kqrts.kqrts_ibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     good2go = True
     while (good2go):
@@ -277,7 +270,9 @@ def _update_amps_mpi(cc, t1, t2, eris):
         return t2new_tmp
     
     nibz = len(kqrts.kqrts_ibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     good2go = True
     while (good2go):
@@ -337,7 +332,9 @@ def _update_amps_mpi(cc, t1, t2, eris):
         return t2new_tmp
 
     nibz = len(kqrts.kqrts_ibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     good2go = True
     while (good2go):
@@ -357,37 +354,29 @@ def _update_amps_mpi(cc, t1, t2, eris):
                 t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
         loader.slave_finished()
     comm.Barrier()
+    comm.Allreduce(MPI.IN_PLACE, t2new.data, op=MPI.SUM)
     
     Wvoov = Wvovo = None
 
-    nibz = len(kqrts.kqrts_ibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
-    loader.set_ranges((range(nibz),))
-    good2go = True
-    while (good2go):
-        good2go, data = loader.slave_set()
-        if good2go is False:
-            break
-        ranges0 = loader.get_blocks_from_data(data)
-        for i in ranges0:
-            kq = kqrts.kqrts_ibz[i]
-            ki, kj, ka, kb = kq
-            eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
-                        [0,nvir,ka,mo_e_v,nonzero_vpadding],
-                        fac=[1.0,-1.0])
-            ejb = _get_epq([0,nocc,kj,mo_e_o,nonzero_opadding],
-                        [0,nvir,kb,mo_e_v,nonzero_vpadding],
-                        fac=[1.0,-1.0])
-            eijab = eia[:, None, :, None] + ejb[:, None, :]
-            t2new[ki, kj, ka] /= eijab
-        loader.slave_finished()
-    comm.Barrier()
-    comm.Allreduce(MPI.IN_PLACE, t2new.data, op=MPI.SUM)
+    for i, kq in enumerate(kqrts.kqrts_ibz):
+        ki, kj, ka, kb = kq
+        eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
+                       [0,nvir,ka,mo_e_v,nonzero_vpadding],
+                       fac=[1.0,-1.0])
+        ejb = _get_epq([0,nocc,kj,mo_e_o,nonzero_opadding],
+                       [0,nvir,kb,mo_e_v,nonzero_vpadding],
+                       fac=[1.0,-1.0])
+        eijab = eia[:, None, :, None] + ejb[:, None, :]
+        t2new[ki, kj, ka] /= eijab
+    
+    time1 = logger.timer_debug1(cc, 'update_amps_mpi', *time0)
+    
     return t1new, t2new
 
 
 
 def _update_amps(cc, t1, t2, eris):
+    time0 = logger.process_clock(), logger.perf_counter()
     logger.info(cc, 'SL DEBUG: Before update_amps. Current use %d MB', lib.current_memory()[0])
     kpts = cc.kpts
     kqrts = cc.kqrts
@@ -631,6 +620,8 @@ def _update_amps(cc, t1, t2, eris):
                        fac=[1.0,-1.0])
         eijab = eia[:, None, :, None] + ejb[:, None, :]
         t2new[ki, kj, ka] /= eijab
+        
+    time1 = logger.timer_debug1(cc, 'update_amps', *time0)
 
     return t1new, t2new
 
@@ -762,8 +753,10 @@ def add_vvvv_mpi_(cc, Ht2, t1, t2, eris):
     for i in range(np.amax(igroup) + 1):
         ka, kb = kakb[i]
         idx = np.where(igroup==i)[0]
-
-        loader = mpi_load_balancer.load_balancer(BLKSIZE=(nkpts,))
+        
+        # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nkpts,))
+        chunk = max(1, (nkpts + size - 1) // size)
+        loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
         loader.set_ranges((range(nkpts),))
         good2go = True
         while (good2go):
@@ -797,7 +790,9 @@ def energy_mpi(cc, t1, t2, eris):
     e = np.array(0.0,dtype=np.complex128)
     
     nibz = kpts.nkpts_ibz
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     good2go = True
     while (good2go):
@@ -814,7 +809,9 @@ def energy_mpi(cc, t1, t2, eris):
     tau = ktensor.zeros_like(t2)
     kq_weights = kqrts.weights_ibz
     nibz = len(kqrts.kqrts_ibz)
-    loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    # loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+    chunk = max(1, (nibz + size - 1) // size)
+    loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
     loader.set_ranges((range(nibz),))
     good2go = True
     while (good2go):
@@ -968,7 +965,8 @@ class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
         emp2 = 0.0
         local_mp2 = np.array(0.0,dtype=np.complex128)
         nibz = len(kqrts.kqrts_ibz)
-        loader = mpi_load_balancer.load_balancer(BLKSIZE=(nibz,))
+        chunk = max(1, (nibz + size - 1) // size)
+        loader = mpi_load_balancer.load_balancer(BLKSIZE=(chunk,))
         loader.set_ranges((range(nibz),))
 
         good2go = True
