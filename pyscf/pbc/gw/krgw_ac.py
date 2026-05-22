@@ -78,6 +78,8 @@ def kernel(gw, mo_energy, mo_coeff, orbs=None,
     # v_hf from DFT/HF density
     if gw.fc:
         exxdiv = 'ewald'
+    elif gw.require_exxdiv:
+        exxdiv = 'ewald'
     else:
         exxdiv = None
     rhf = scf.KRHF(gw.mol, gw.kpts, exxdiv=exxdiv)
@@ -552,6 +554,7 @@ class KRGWAC(lib.StreamObject):
         self.verbose = self.mol.verbose
         self.stdout = self.mol.stdout
         self.max_memory = mf.max_memory
+        self.require_exxdiv = False
 
         #TODO: implement frozen orbs
         if frozen is not None and frozen > 0:

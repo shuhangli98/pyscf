@@ -38,6 +38,14 @@ from pyscf.pbc.df import GDF, RSGDF
 from pyscf.pbc.df import df
 from pyscf import __config__
 
+import psutil, resource, os
+
+process = psutil.Process(os.getpid())
+def report_mem(msg=""):
+    rss = process.memory_info().rss / 1024**2
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    print(f"{msg:<24s} | Current RSS: {rss:10.2f} MB | Peak: {peak:10.2f} MB")
+
 # einsum = np.einsum
 einsum = lib.einsum
 
@@ -229,6 +237,8 @@ def update_amps(cc, t1, t2, eris):
         t2new[ki, kj, ka] /= eijab
 
     time0 = log.timer_debug1('update t1 t2', *time0)
+    
+    report_mem('CC iter')
 
     return t1new, t2new
 
@@ -503,13 +513,13 @@ class RCCSD(pyscf.cc.ccsd.CCSD):
         'direct', 'keep_exxdiv','mem_save', 'incore',
     }
 
-    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
+    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None, gen_kconserv=False):
         assert (isinstance(mf, scf.khf.KSCF))
         # mf.to_khf converts mf to a non-symmetry object
         pyscf.cc.ccsd.CCSD.__init__(self, mf.to_khf(), frozen, mo_coeff, mo_occ)
         self.kpts = mf.kpts
         self.khelper = kpts_helper.KptsHelper(mf.cell, mf.kpts,
-                                              init_symm_map=False)
+                                              init_symm_map=False, gen_kconserv=gen_kconserv)
         self.ip_partition = None
         self.ea_partition = None
         self.direct = True  # If possible, use GDF to compute Wvvvv on-the-fly

@@ -32,7 +32,19 @@ def search_point_group_ops(cell, tol=SYMPREC):
         pbc_axis[cell.dimension:] = False
 
     a_norm = np.sqrt(np.diag(G))
-    a_angle = np.arccos(G / np.outer(a_norm, a_norm))
+    cosA = G / np.outer(a_norm, a_norm)
+    mask = (cosA < -1) | (cosA > 1)
+    if np.any(mask):
+        delta = np.max(np.abs(cosA[mask]) - 1)
+        if delta < 1e-8:
+            # print(f"[Warning] cos(angle) out of range by {delta:.2e}, clipped to [-1,1].")
+            cosA = np.clip(cosA, -1.0, 1.0)
+        else:
+            raise ValueError(
+                f"Invalid cos(angle) values found (max deviation {delta:.2e}). "
+                "Possible issue with lattice vectors or units."
+            )
+    a_angle = np.arccos(cosA)
     tol2 = tol**2
 
     rotations = []
@@ -46,7 +58,23 @@ def search_point_group_ops(cell, tol=SYMPREC):
         if (length_error > tol).any():
             continue
         tmp = (a_norm + a_tilde_norm)
-        a_tilde_angle = np.arccos(G_tilde / np.outer(a_tilde_norm, a_tilde_norm))
+        
+        cosA_tilde = G_tilde / np.outer(a_tilde_norm, a_tilde_norm)
+        mask2 = (cosA_tilde < -1) | (cosA_tilde > 1)
+        if np.any(mask2):
+            delta2 = np.max(np.abs(cosA_tilde[mask2]) - 1)
+            if delta2 < 1e-8:
+                # print(f"[Warning] cos(angle) out of range by {delta2:.2e}, clipped to [-1,1].")
+                cosA_tilde = np.clip(cosA_tilde, -1.0, 1.0)
+            else:
+                raise ValueError(
+                    f"Invalid cos(angle) values found in G_tilde (max deviation {delta2:.2e}). "
+                    "Possible issue with lattice vectors or units."
+                )
+
+        a_tilde_angle = np.arccos(cosA_tilde)
+        
+        # a_tilde_angle = np.arccos(G_tilde / np.outer(a_tilde_norm, a_tilde_norm))
         angle_error = np.sin(a_angle - a_tilde_angle) **2 * np.outer(tmp,tmp) / 4
         if (angle_error > tol2).any():
             continue

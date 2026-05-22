@@ -24,7 +24,7 @@ from pyscf.lib import logger
 from pyscf import __config__
 from pyscf.pbc.symm import symmetry as symm
 from pyscf.pbc.symm.group import PGElement, PointGroup, Representation
-from pyscf.pbc.lib.kpts_helper import member, round_to_fbz, KPT_DIFF_TOL
+from pyscf.pbc.lib.kpts_helper import member, round_to_fbz, KPT_DIFF_TOL, get_kconserv_KPoint
 from numpy.linalg import inv
 
 libpbc = lib.load_library('libpbc')
@@ -194,11 +194,15 @@ def make_ktuples_ibz(kpts, kpts_scaled=None, ntuple=2, tol=KPT_DIFF_TOL):
     weight_ibz = np.bincount(bz2ibz) * (1.0 / nktuple)
     return ibz2bz, weight_ibz, bz2ibz, stars, stars_ops, stars_ops_bz
 
-def make_k4_ibz(kpts, sym='s1', return_ops=False):
+def make_k4_ibz(kpts, sym='s1', return_ops=False, gen_kconserv=False):
     #physicist's notation
     ibz2bz, weight, bz2ibz, stars, stars_ops, stars_ops_bz = \
             kpts.make_ktuples_ibz(ntuple=3)
-    kconserv = kpts.get_kconserv()
+            
+    if gen_kconserv:
+        kconserv = get_kconserv_KPoint(kpts.cell, kpts)
+    else:
+        kconserv = kpts.get_kconserv()
 
     kija = kpts.index_to_ktuple(ibz2bz, 3)
     kb = kconserv[kija[:,0], kija[:,2], kija[:,1]]
@@ -1164,11 +1168,11 @@ class KQuartets:
         self._kqrts_stab = None
         self._ops_stab = None
 
-    def build(self):
+    def build(self, gen_kconserv=False):
         kpts = self.kpts
         (self.kqrts_ibz, self.weights_ibz, self.bz2ibz,
          self.ibz2bz, self.stars_ops, self.stars_ops_bz) = \
-                kpts.make_k4_ibz(sym='s1', return_ops=True)
+                kpts.make_k4_ibz(sym='s1', return_ops=True, gen_kconserv=gen_kconserv)
 
         # Sanity check
         #assert -1 not in self.stars_ops_bz

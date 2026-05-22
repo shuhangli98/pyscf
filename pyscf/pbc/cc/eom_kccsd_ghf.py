@@ -1326,6 +1326,8 @@ def kernel_ee(eom, nroots=1, koopmans=False, guess=None, left=False,
         nroots = min(nroots, size)
 
         matvec, diag = eom.gen_matvec(kshift, imds, left=left, **kwargs)
+        print("DIAG SIZE", diag.size)
+        print("SIZE", size)
         if diag.size != size:
             raise ValueError("Number of diagonal elements in effective H does not match R vector size")
         # TODO update `diag` in case of frozen orbitals

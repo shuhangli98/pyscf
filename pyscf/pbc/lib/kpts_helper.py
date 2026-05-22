@@ -283,6 +283,21 @@ def get_kconserv(cell, kpts):
         kconserv[mask] = N
     return kconserv
 
+def get_kconserv_KPoint(cell, kpts_KP):
+    kpts = kpts_KP.kpts
+    nkpts = kpts.shape[0]
+    a = cell.lattice_vectors() / (2*np.pi)
+
+    kconserv = np.zeros((nkpts,nkpts,nkpts), dtype=int)
+    kvKLM = kpts[:,None,None,:] - kpts[:,None,:] + kpts
+    for N, kvN in enumerate(kpts):
+        kvKLMN = np.einsum('wx,klmx->wklm', a, kvKLM - kvN)
+        # check whether (1/(2pi) k_{KLMN} dot a) is an integer
+        kvKLMN_int = np.rint(kvKLMN)
+        mask = np.einsum('wklm->klm', abs(kvKLMN - kvKLMN_int)) < 1e-9
+        kconserv[mask] = N
+    return kconserv
+
 def get_kconserv_ria(cell, kpts):
     r''' Get the momentum conservation array for single excitation amplitudes
     for a set of k-points with appropriate k-shift.
@@ -501,7 +516,7 @@ class VectorSplitter:
 
 
 class KptsHelper(lib.StreamObject):
-    def __init__(self, cell, kpts, init_symm_map=True):
+    def __init__(self, cell, kpts, init_symm_map=True, gen_kconserv=False):
         '''Helper class for handling k-points in correlated calculations.
 
         Attributes:
@@ -516,8 +531,11 @@ class KptsHelper(lib.StreamObject):
                 Whether to build `symm_map` at initialization. Default is True.
         '''
         from pyscf.pbc.lib.kpts import KPoints
-        if isinstance(kpts, KPoints):
+        if isinstance(kpts, KPoints) and not gen_kconserv:
             self.kconserv = kpts.get_kconserv()
+            nkpts = kpts.nkpts
+        elif isinstance(kpts, KPoints) and gen_kconserv:
+            self.kconserv = get_kconserv_KPoint(cell, kpts)
             nkpts = kpts.nkpts
         else:
             self.kconserv = get_kconserv(cell, kpts)

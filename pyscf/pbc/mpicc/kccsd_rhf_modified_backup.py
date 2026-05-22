@@ -1,21 +1,3 @@
-#!/usr/bin/env python
-# Copyright 2022-2023 The PySCF Developers. All Rights Reserved.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
-#
-# Authors: Xing Zhang <zhangxing.nju@gmail.com>
-#
-
 from functools import reduce
 import numpy as np
 
@@ -30,24 +12,324 @@ from pyscf.pbc.mp.kmp2 import (
     padded_mo_coeff,
     padding_k_idx,
 )
-from pyscf.pbc.cc import kintermediates_rhf_ksymm as imdk
+from pyscf.pbc.mpicc import kintermediates_rhf_ksymm as imdk
+from pyscf.pbc.mpitools.mpi_helper import (
+    generate_max_task_list, 
+    safeAllreduceInPlace, 
+    safeAllreduceInPlace_ksymm,
+    safeNormDiff, 
+    safeBcastInPlace,
+)
+from pyscf.pbc.lib.kpts_helper import gamma_point
+from pyscf.pbc.df import df
+from mpi4py import MPI
+import pyscf.pbc.cc.kccsd_rhf
 from pyscf.pbc.cc.kccsd_rhf import (
     RCCSD,
     _get_epq,
-    _init_df_eris,
 )
-
-import psutil, resource, os
-
-process = psutil.Process(os.getpid())
-def report_mem(msg=""):
-    rss = process.memory_info().rss / 1024**2
-    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
-    print(f"{msg:<24s} | Current RSS: {rss:10.2f} MB | Peak: {peak:10.2f} MB")
 
 einsum = lib.einsum
 
-def update_amps(cc, t1, t2, eris):
+rank = MPI.COMM_WORLD.Get_rank()
+size = MPI.COMM_WORLD.Get_size()
+comm = MPI.COMM_WORLD
+
+def _update_amps_mpi(cc, t1, t2, eris):
+    time0 = logger.process_clock(), logger.perf_counter()
+    logger.info(cc, 'SL DEBUG: Before update_amps. Current use %d MB', lib.current_memory()[0])
+    kpts = cc.kpts
+    kqrts = cc.kqrts
+    rmat = cc.rmat
+    kconserv = cc.khelper.kconserv
+    
+    nkpts, nocc, nvir = t1.shape
+    fock = eris.fock
+    mo_e_o = [e[:nocc] for e in eris.mo_energy]
+    mo_e_v = [e[nocc:] for e in eris.mo_energy]
+
+    # Get location of padded elements in occupied and virtual space
+    nonzero_opadding, nonzero_vpadding = padding_k_idx(cc, kind="split")
+
+    ki_ibz_bz = kpts.ibz2bz[np.arange(kpts.nkpts_ibz)]
+    fov = fock[:, :nocc, nocc:]
+    kconserv = cc.khelper.kconserv
+    
+    Foo = imdk.cc_Foo(kpts, kqrts, t1, t2, eris, rmat)
+    Fvv = imdk.cc_Fvv(kpts, kqrts, t1, t2, eris, rmat)
+    Fov = imdk.cc_Fov(kpts, kqrts, t1, t2, eris, rmat)
+    Loo = imdk.Loo(kpts, kqrts, t1, t2, eris, rmat)
+    Lvv = imdk.Lvv(kpts, kqrts, t1, t2, eris, rmat)
+
+    Fov = Fov.todense()
+    logger.info(cc, 'SL DEBUG: After todense function. Current use %d MB', lib.current_memory()[0])
+    
+    # Move energy terms to the other side
+    for ki_ibz in range(kpts.nkpts_ibz):
+        ki = kpts.ibz2bz[ki_ibz]
+        Foo[ki][np.diag_indices(nocc)] -= mo_e_o[ki]
+        Fvv[ki][np.diag_indices(nvir)] -= mo_e_v[ki]
+        Loo[ki][np.diag_indices(nocc)] -= mo_e_o[ki]
+        Lvv[ki][np.diag_indices(nvir)] -= mo_e_v[ki]
+        
+    logger.info(cc, 'SL DEBUG: Before t1_new function. Current use %d MB', lib.current_memory()[0])
+    t1new = ktensor.zeros_like(t1)
+    t1 = t1.todense()
+    logger.info(cc, 'SL DEBUG: Before t2_new function. Current use %d MB', lib.current_memory()[0])
+    t2new = ktensor.zeros_like(t2)
+    logger.info(cc, 'SL DEBUG: Before T1 equations. Current use %d MB', lib.current_memory()[0])
+    
+    # T1 equation
+    nibz = kpts.nkpts_ibz
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for ka_ibz in range(xstart, xend):
+        ki = ka = kpts.ibz2bz[ka_ibz]
+        t1new[ka]  = fov[ka].conj()
+        t1new[ka] += -2. * einsum('kc,ka,ic->ia', fov[ki], t1[ka], t1[ki])
+        t1new[ka] += einsum('ac,ic->ia', Fvv[ka], t1[ki])
+        t1new[ka] += -einsum('ki,ka->ia', Foo[ki], t1[ka])
+    comm.Barrier()
+    
+    nibz = len(kqrts.kqrts_ibz)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kk, kc, kd = kq
+        ka = ki
+        Svovv = 2 * eris.vovv[ka, kk, kc] - eris.vovv[ka, kk, kd].transpose(0, 1, 3, 2)
+        tau_term_1 = t2[ki, kk, kc].copy()
+        if ki == kc and kk == kd:
+            tau_term_1 += einsum('ic,kd->ikcd', t1[ki], t1[kk])
+        fock = einsum('akcd,ikcd->ia', Svovv, tau_term_1)
+        for _, iop in kqrts.loop_stabilizer(i):
+            rmat_oo = rmat.oo[ka][iop]
+            rmat_vv = rmat.vv[ka][iop]
+            t1new[ka] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
+                
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        kk, kl, ki, kc = kq
+        ka = ki
+        Sooov = 2 * eris.ooov[kk, kl, ki] - eris.ooov[kl, kk, ki].transpose(1, 0, 2, 3)
+        tau_term_1 = t2[kk, kl, ka].copy()
+        if kk == ka and kl == kc:
+            tau_term_1 += einsum('ka,lc->klac', t1[ka], t1[kc])
+        fock = -einsum('klic,klac->ia', Sooov, tau_term_1)
+        
+        op_group = kqrts.stars_ops[i]
+        ka_prim = kpts.k2opk[ka, op_group]
+        mask = np.isin(ka_prim, ki_ibz_bz)
+        for iop, ka_p in zip(op_group[mask], ka_prim[mask]):
+            rmat_oo = rmat.oo[ka][iop]
+            rmat_vv = rmat.vv[ka][iop]
+            t1new[ka_p] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
+        
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kk, ka, kc = kq
+        if ka == ki and kk == kc:
+            tau_term = 2 * t2[kk, ki, kk] - t2[ki, kk, kk].transpose(1, 0, 2, 3)
+            if ki == kk:
+                tau_term += einsum('ic,ka->kica', t1[ki], t1[ka])
+
+            fock = einsum('kc,kica->ia', Fov[kc], tau_term)
+            fock += einsum('akic,kc->ia', 2 * eris.voov[ka, kk, ki], t1[kc])
+            fock += einsum('kaic,kc->ia', -eris.ovov[kk, ka, ki], t1[kc])
+
+            for _, iop in kqrts.loop_stabilizer(i):
+                rmat_oo = rmat.oo[ka][iop]
+                rmat_vv = rmat.vv[ka][iop]
+                t1new[ka] += einsum('ia,im,ae->me', fock, rmat_oo, rmat_vv.conj())
+                
+    comm.Allreduce(MPI.IN_PLACE, t1new.data, op=MPI.SUM)
+    
+    for ki_ibz in range(kpts.nkpts_ibz):
+        ka = ki = kpts.ibz2bz[ki_ibz]
+        # Remove zero/padded elements from denominator
+        eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
+                       [0,nvir,ka,mo_e_v,nonzero_vpadding],
+                       fac=[1.0,-1.0])
+        t1new[ki] /= eia
+            
+    # T2 equation
+    Loo = Loo.todense()
+    Lvv = Lvv.todense()
+    
+    nibz = len(kqrts.kqrts_ibz)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new[ki, kj, ka] = eris.oovv[ki, kj, ka].conj()
+    comm.Barrier()
+            
+    mem_now = lib.current_memory()[0]
+    if (cc.incore_complete or
+        _memory_4d(cc, [nocc,]*4) + mem_now < cc.max_memory * .9):
+        logger.info(cc, "SL DEBUG: Woooo with incore.")
+        Woooo = imdk.cc_Woooo(kpts, kqrts, t1, t2, eris, rmat)
+    else:
+        # TODO: This function needs to be parallelized.
+        logger.info(cc, "SL DEBUG: Woooo with outcore.")
+        metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
+                    'label': 'oooo', 'trans': 'ccnn',
+                    'incore': False, 'prefix':'Woooo'}
+        Woooo = ktensor.empty([nocc,]*4, dtype=t1.dtype, metadata=metadata)
+        Woooo = imdk.cc_Woooo(kpts, kqrts, t1, t2, eris, rmat, Woooo)
+
+    mem_now = lib.current_memory()[0]
+    if (not cc.ktensor_direct and
+        _memory_4d(cc, [nocc,]*4, False) + mem_now < cc.max_memory * .9):
+        Woooo = Woooo.todense()
+
+    def _t2_oooo(ki,kj,ka,kb):
+        t2new_tmp = 0
+        for kl in range(nkpts):
+            kk = kconserv[kj, kl, ki]
+            tau_term = t2[kk, kl, ka].copy()
+            if kl == kb and kk == ka:
+                tau_term += einsum('ic,jd->ijcd', t1[ka], t1[kb])
+            t2new_tmp += 0.5 * einsum('klij,klab->ijab', Woooo[kk, kl, ki], tau_term)
+        return t2new_tmp
+    
+    nibz = len(kqrts.kqrts_ibz)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new_tmp = _t2_oooo(ki,kj,ka,kb)
+        t2new[ki, kj, ka] += t2new_tmp
+        if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
+            t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
+        else:
+            t2new_tmp = _t2_oooo(kj,ki,kb,ka)
+            t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
+    comm.Barrier()
+    
+    Woooo = None
+
+    add_vvvv_mpi_(cc, t2new, t1, t2, eris)
+
+    def _t2_voov1(ki,kj,ka,kb):
+        t2new_tmp = einsum('ac,ijcb->ijab', Lvv[ka], t2[ki, kj, ka])
+        t2new_tmp += einsum('ki,kjab->ijab', -Loo[ki], t2[ki, kj, ka])
+
+        kc = kj
+        tmp2 = np.asarray(eris.vovv[kc, ki, kb]).transpose(3, 2, 1, 0).conj() \
+               - einsum('kbic,ka->abic', eris.ovov[ka, kb, ki], t1[ka])
+        t2new_tmp += einsum('abic,jc->ijab', tmp2, t1[kj])
+
+        kk = kb
+        tmp2 = np.asarray(eris.ooov[kj, ki, kk]).transpose(3, 2, 1, 0).conj() \
+               + einsum('akic,jc->akij', eris.voov[ka, kk, ki], t1[kj])
+        t2new_tmp -= einsum('akij,kb->ijab', tmp2, t1[kb])
+        return t2new_tmp
+    
+    nibz = len(kqrts.kqrts_ibz)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new_tmp = _t2_voov1(ki,kj,ka,kb)
+        t2new[ki, kj, ka] += t2new_tmp
+        if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
+            t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
+        else:
+            t2new_tmp = _t2_voov1(kj,ki,kb,ka)
+            t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
+    comm.Barrier()    
+        
+    mem_now = lib.current_memory()[0]
+    if (cc.incore_complete or
+        _memory_4d(cc, [nocc,nocc,nvir,nvir])*2 + mem_now < cc.max_memory*.9):
+        logger.info(cc, "SL DEBUG: Wvoov, Wvovo with incore.") # incore_complete should be false by default.
+        Wvoov = imdk.cc_Wvoov(kpts, kqrts, t1, t2, eris, rmat)
+        Wvovo = imdk.cc_Wvovo(kpts, kqrts, t1, t2, eris, rmat)
+    else:
+        # TODO: This function needs to be parallelized.
+        logger.info(cc, "SL DEBUG: Wvoov, Wvovo with outcore.")
+        metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
+                    'trans': 'ccnn', 'incore': False}
+        Wvoov = ktensor.empty([nvir,nocc,nocc,nvir], dtype=t1.dtype,
+                              metadata={**metadata, 'label':'voov', 'prefix':'Wvoov'})
+        Wvovo = ktensor.empty([nvir,nocc,nvir,nocc], dtype=t1.dtype,
+                              metadata={**metadata, 'label':'vovo', 'prefix':'Wvovo'})
+        Wvoov = imdk.cc_Wvoov(kpts, kqrts, t1, t2, eris, rmat, Wvoov)
+        Wvovo = imdk.cc_Wvovo(kpts, kqrts, t1, t2, eris, rmat, Wvovo)
+
+    mem_now = lib.current_memory()[0]
+    if (not cc.ktensor_direct and
+        _memory_4d(cc, [nocc,nocc,nvir,nvir], False)*2 + mem_now < cc.max_memory*.9):
+        Wvoov = Wvoov.todense()
+        Wvovo = Wvovo.todense()
+
+    def _t2_voov2(ki,kj,ka,kb):
+        t2new_tmp = 0
+        for kk in range(nkpts):
+            kc = kconserv[ka, ki, kk]
+            tmp_voov = 2. * Wvoov[ka, kk, ki] - Wvovo[ka, kk, kc].transpose(0, 1, 3, 2)
+            t2new_tmp += einsum('akic,kjcb->ijab', tmp_voov, t2[kk, kj, kc])
+
+            kc = kconserv[ka, ki, kk]
+            t2new_tmp -= einsum('akic,kjbc->ijab', Wvoov[ka, kk, ki], t2[kk, kj, kb])
+
+            kc = kconserv[kk, ka, kj]
+            t2new_tmp -= einsum('bkci,kjac->ijab', Wvovo[kb, kk, kc], t2[kk, kj, ka])
+        return t2new_tmp
+
+    nibz = len(kqrts.kqrts_ibz)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        t2new_tmp = _t2_voov2(ki,kj,ka,kb)
+        t2new[ki, kj, ka] += t2new_tmp
+        if lib.isin_1d((kj,ki,kb,ka), kqrts.kqrts_ibz):
+            t2new[kj, ki, kb] += t2new_tmp.transpose(1, 0, 3, 2)
+        else:
+            t2new_tmp = _t2_voov2(kj,ki,kb,ka)
+            t2new[ki, kj, ka] += t2new_tmp.transpose(1, 0, 3, 2)
+    comm.Allreduce(MPI.IN_PLACE, t2new.data, op=MPI.SUM)
+    
+    Wvoov = Wvovo = None
+
+    for i, kq in enumerate(kqrts.kqrts_ibz):
+        ki, kj, ka, kb = kq
+        eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
+                       [0,nvir,ka,mo_e_v,nonzero_vpadding],
+                       fac=[1.0,-1.0])
+        ejb = _get_epq([0,nocc,kj,mo_e_o,nonzero_opadding],
+                       [0,nvir,kb,mo_e_v,nonzero_vpadding],
+                       fac=[1.0,-1.0])
+        eijab = eia[:, None, :, None] + ejb[:, None, :]
+        t2new[ki, kj, ka] /= eijab
+    
+    time1 = logger.timer_debug1(cc, 'update_amps_mpi', *time0)
+    
+    return t1new, t2new
+
+
+
+def _update_amps(cc, t1, t2, eris):
+    time0 = logger.process_clock(), logger.perf_counter()
     logger.info(cc, 'SL DEBUG: Before update_amps. Current use %d MB', lib.current_memory()[0])
     kpts = cc.kpts
     kqrts = cc.kqrts
@@ -66,17 +348,11 @@ def update_amps(cc, t1, t2, eris):
     fov = fock[:, :nocc, nocc:]
     kconserv = cc.khelper.kconserv
     
-    logger.info(cc, 'SL DEBUG: Before Foo functions. Current use %d MB', lib.current_memory()[0])
     Foo = imdk.cc_Foo(kpts, kqrts, t1, t2, eris, rmat)
-    logger.info(cc, 'SL DEBUG: After Foo function. Current use %d MB', lib.current_memory()[0])
     Fvv = imdk.cc_Fvv(kpts, kqrts, t1, t2, eris, rmat)
-    logger.info(cc, 'SL DEBUG: After Fvv function. Current use %d MB', lib.current_memory()[0])
     Fov = imdk.cc_Fov(kpts, kqrts, t1, t2, eris, rmat)
-    logger.info(cc, 'SL DEBUG: After Fov function. Current use %d MB', lib.current_memory()[0])
     Loo = imdk.Loo(kpts, kqrts, t1, t2, eris, rmat)
-    logger.info(cc, 'SL DEBUG: After Loo function. Current use %d MB', lib.current_memory()[0])
     Lvv = imdk.Lvv(kpts, kqrts, t1, t2, eris, rmat)
-    logger.info(cc, 'SL DEBUG: After Lvv function. Current use %d MB', lib.current_memory()[0])
 
     Fov = Fov.todense()
     logger.info(cc, 'SL DEBUG: After todense function. Current use %d MB', lib.current_memory()[0])
@@ -95,7 +371,6 @@ def update_amps(cc, t1, t2, eris):
     logger.info(cc, 'SL DEBUG: Before t2_new function. Current use %d MB', lib.current_memory()[0])
     t2new = ktensor.empty_like(t2)
     logger.info(cc, 'SL DEBUG: Before t2_new to dense function. Current use %d MB', lib.current_memory()[0])
-    # t2 = t2.todense()
 
     logger.info(cc, 'SL DEBUG: Before T1 equations. Current use %d MB', lib.current_memory()[0])
     
@@ -299,7 +574,7 @@ def update_amps(cc, t1, t2, eris):
         eijab = eia[:, None, :, None] + ejb[:, None, :]
         t2new[ki, kj, ka] /= eijab
         
-    report_mem('CC iter')
+    time1 = logger.timer_debug1(cc, 'update_amps', *time0)
 
     return t1new, t2new
 
@@ -314,45 +589,18 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
     nkpts = kpts.nkpts
     kconserv = cc.khelper.kconserv
 
-    mem_now = lib.current_memory()[0]
-    if (not cc.incore_complete and
-        cc.direct and getattr(eris, 'Lpv', None) is not None):
-        logger.info(cc, "SL DEBUG: Wvvvv direct")
-        def get_Wvvvv(ka, kb, kc):
-            Lpv = eris.Lpv
-            kd = kconserv[ka, kc, kb]
-            Lbd = (Lpv[kb,kd][:,nocc:] -
-                   lib.einsum('Lkd,kb->Lbd', Lpv[kb,kd][:,:nocc], t1[kb]))
-            Wvvvv = lib.einsum('Lac,Lbd->abcd', Lpv[ka,kc][:,nocc:], Lbd)
-            Lbd = None
-            kcbd = lib.einsum('Lkc,Lbd->kcbd', Lpv[ka,kc][:,:nocc],
-                              Lpv[kb,kd][:,nocc:])
-            Wvvvv -= lib.einsum('kcbd,ka->abcd', kcbd, t1[ka])
-            Wvvvv *= (1. / nkpts)
-            return Wvvvv
-    elif (cc.incore_complete or
-          _memory_4d(cc, [nvir,]*4) + mem_now < cc.max_memory * .9):
-        _Wvvvv = imdk.cc_Wvvvv(kpts, kqrts, t1, t2, eris, rmat)
-
-        mem_now = lib.current_memory()[0]
-        if (not cc.ktensor_direct and
-            _memory_4d(cc, [nvir,]*4, False) + mem_now < cc.max_memory * .9):
-            _Wvvvv = _Wvvvv.todense()
-
-        get_Wvvvv = lambda ka, kb, kc: _Wvvvv[ka, kb, kc]
-    else:
-        metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
-                    'label': 'vvvv', 'trans': 'ccnn',
-                    'incore': False, 'prefix':'Wvvvv'}
-        _Wvvvv = ktensor.empty([nvir,]*4, dtype=t1.dtype, metadata=metadata)
-        _Wvvvv = imdk.cc_Wvvvv(kpts, kqrts, t1, t2, eris, rmat, _Wvvvv)
-
-        mem_now = lib.current_memory()[0]
-        if (not cc.ktensor_direct and
-            _memory_4d(cc, [nvir,]*4, False) + mem_now < cc.max_memory * .9):
-            _Wvvvv = _Wvvvv.todense()
-
-        get_Wvvvv = lambda ka, kb, kc: _Wvvvv[ka, kb, kc]
+    def _get_Wvvvv(ka, kb, kc):
+        Lpv = eris.Lpv
+        kd = kconserv[ka, kc, kb]
+        Lbd = (Lpv[kb,kd][:,nocc:] -
+                lib.einsum('Lkd,kb->Lbd', Lpv[kb,kd][:,:nocc], t1[kb]))
+        Wvvvv = lib.einsum('Lac,Lbd->abcd', Lpv[ka,kc][:,nocc:], Lbd)
+        Lbd = None
+        kcbd = lib.einsum('Lkc,Lbd->kcbd', Lpv[ka,kc][:,:nocc],
+                            Lpv[kb,kd][:,nocc:])
+        Wvvvv -= lib.einsum('kcbd,ka->abcd', kcbd, t1[ka])
+        Wvvvv *= (1. / nkpts)
+        return Wvvvv
 
     kakb, igroup = np.unique(kqrts.kqrts_ibz[:,2:], axis=0, return_inverse=True)
     igroup = igroup.ravel()
@@ -362,7 +610,7 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
 
         for kc in range(nkpts):
             kd = kconserv[ka, kc, kb]
-            Wvvvv = get_Wvvvv(ka, kb, kc)
+            Wvvvv = _get_Wvvvv(ka, kb, kc)
             for m in idx:
                 ki,kj,kaa,kbb = kqrts.kqrts_ibz[m]
                 assert kaa==ka and kbb==kb
@@ -370,9 +618,104 @@ def add_vvvv_(cc, Ht2, t1, t2, eris):
                 if ki == kc and kj == kd:
                     tau += np.einsum('ic,jd->ijcd', t1[ki], t1[kj])
                 Ht2[ki, kj, ka] += einsum('abcd,ijcd->ijab', Wvvvv, tau)
-
-    _Wvvvv = None
     return Ht2
+
+def add_vvvv_mpi_(cc, Ht2, t1, t2, eris):
+    kpts = cc.kpts
+    kqrts = cc.kqrts
+    rmat = cc.rmat
+
+    nocc = cc.nocc
+    nmo = cc.nmo
+    nvir = nmo - nocc
+    nkpts = kpts.nkpts
+    kconserv = cc.khelper.kconserv
+
+    def _get_Wvvvv(ka, kb, kc):
+        Lpv = eris.Lpv
+        kd = kconserv[ka, kc, kb]
+        Lbd = (Lpv[kb,kd][:,nocc:] -
+                lib.einsum('Lkd,kb->Lbd', Lpv[kb,kd][:,:nocc], t1[kb]))
+        Wvvvv = lib.einsum('Lac,Lbd->abcd', Lpv[ka,kc][:,nocc:], Lbd)
+        Lbd = None
+        kcbd = lib.einsum('Lkc,Lbd->kcbd', Lpv[ka,kc][:,:nocc],
+                            Lpv[kb,kd][:,nocc:])
+        Wvvvv -= lib.einsum('kcbd,ka->abcd', kcbd, t1[ka])
+        Wvvvv *= (1. / nkpts)
+        return Wvvvv
+
+    kakb, igroup = np.unique(kqrts.kqrts_ibz[:,2:], axis=0, return_inverse=True)
+    igroup = igroup.ravel()
+    
+    base = nkpts // size
+    rem = nkpts % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    
+    for i in range(np.amax(igroup) + 1):
+        ka, kb = kakb[i]
+        idx = np.where(igroup==i)[0]
+        
+        for kc in range(xstart, xend):
+            kd = kconserv[ka, kc, kb]
+            Wvvvv = _get_Wvvvv(ka, kb, kc)
+            for m in idx:
+                ki,kj,kaa,kbb = kqrts.kqrts_ibz[m]
+                assert kaa==ka and kbb==kb
+                tau = t2[ki, kj, kc].copy()
+                if ki == kc and kj == kd:
+                    tau += np.einsum('ic,jd->ijcd', t1[ki], t1[kj])
+                Ht2[ki, kj, ka] += einsum('abcd,ijcd->ijab', Wvvvv, tau)
+    comm.Barrier()
+    return Ht2
+
+def energy_mpi(cc, t1, t2, eris):
+    logger.info(cc, 'SL DEBUG: Before energy. Current use %d MB', lib.current_memory()[0])
+    kpts = cc.kpts
+    kqrts = cc.kqrts
+
+    nkpts, nocc, nvir = t1.shape
+    fock = eris.fock
+    e_tol = 0.0
+    e = 0.0
+    
+    nibz = kpts.nkpts_ibz
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for ki_ibz in range(xstart, xend):
+        ki = kpts.ibz2bz[ki_ibz]
+        weight = kpts.weights_ibz[ki_ibz]
+        e += 2 * einsum('ia,ia', fock[ki,:nocc,nocc:], t1[ki]) * weight
+    
+    tau = ktensor.zeros_like(t2)
+    nibz = len(kqrts.kqrts_ibz)
+    base = nibz // size
+    rem = nibz % size
+    xstart = rank * base + min(rank, rem)
+    xend = xstart + base + (1 if rank < rem else 0)
+    for i in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[i]
+        ki, kj, ka, kb = kq
+        tau[ki, kj, ka] = t2[ki, kj, ka]
+        if ki == ka and kj == kb:
+            tau[ki, kj, ka] += einsum('ia,jb->ijab', t1[ki], t1[kj])
+            
+    kq_weights = kqrts.weights_ibz
+    for k in range(xstart, xend):
+        kq = kqrts.kqrts_ibz[k]
+        ki, kj, ka, kb = kq
+        weight = kq_weights[k] * nkpts**3
+        e += 2 * einsum('ijab,ijab', tau[ki, kj, ka], eris.oovv[ki, kj, ka]) * weight
+        e -= einsum('ijab,ijba', tau[ki, kj, ka], eris.oovv[ki, kj, kb]) * weight
+    e_tol = comm.allreduce(e, op=MPI.SUM)
+
+    e_tol /= nkpts
+    if abs(e_tol.imag) > 1e-4:
+        logger.warn(cc, 'Non-zero imaginary part found in KRCCSD energy %s', e_tol)
+    logger.info(cc, 'SL DEBUG: After energy. Current use %d MB', lib.current_memory()[0])
+    return e_tol.real
 
 def energy(cc, t1, t2, eris):
     logger.info(cc, 'SL DEBUG: Before energy. Current use %d MB', lib.current_memory()[0])
@@ -409,10 +752,24 @@ def energy(cc, t1, t2, eris):
     return e.real
 
 
-class KsymAdaptedRCCSD(RCCSD):
-    _keys = {'kqrts', 'rmat', 'ktensor_direct', 'eris_outcore', 't2_incore'}
+def _update_procs_mf(mf):
+    '''Update mean-field objects to be the same on all processors'''
+    mf1 = mf.copy()
 
-    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None, gen_kconserv=False):
+    mo_coeff  = comm.bcast(mf.mo_coeff, root=0)
+    mo_energy = comm.bcast(mf.mo_energy, root=0)
+    mo_occ    = comm.bcast(mf.mo_occ, root=0)
+    kpts      = comm.bcast(mf.kpts, root=0)
+
+    mf1.mo_coeff = mo_coeff
+    mf1.mo_energy = mo_energy
+    mf1.mo_occ = mo_occ
+    mf1.kpts  = kpts
+    comm.Barrier()
+    return mf1
+
+class RCCSD(pyscf.pbc.cc.kccsd_rhf.RCCSD):
+    def __init__(self, mf, frozen=None, mo_coeff=None, mo_occ=None):
         '''
         Attributes:
             ktensor_direct : bool
@@ -425,14 +782,15 @@ class KsymAdaptedRCCSD(RCCSD):
                 Otherwise, whether the integrals are stored on the disk or in memory
                 depends on the available memory size. Default is False.
         '''
-        # NOTE self._scf is a non-symmetry object, see RCCSD.__init__
-        RCCSD.__init__(self, mf, frozen, mo_coeff, mo_occ, gen_kconserv=gen_kconserv)
-        self.kqrts = KQuartets(mf.kpts).build(gen_kconserv)
+        mf = _update_procs_mf(mf)
+        pyscf.pbc.cc.kccsd_rhf.RCCSD.__init__(self, mf, frozen, mo_coeff, mo_occ)
+        self.kqrts = KQuartets(mf.kpts).build()
         self.rmat = None
         self.ktensor_direct = False
         self.eris_outcore = False
         self.t2_incore = True
-
+        self.do_mpi = True
+    
     def ao2mo(self, mo_coeff=None):
         logger.info(self, 'SL DEBUG: Before ao2mo. Current use %d MB', lib.current_memory()[0])
         eris = _PhysicistsERIs()
@@ -452,8 +810,79 @@ class KsymAdaptedRCCSD(RCCSD):
             eris = _make_eris_outcore(self, eris, self._scf.with_df.ao2mo)
         logger.info(self, 'SL DEBUG: After ao2mo. Current use %d MB', lib.current_memory()[0])
         return eris
+        
+    def _init_amps_mpi(self, eris):
+        time0 = logger.process_clock(), logger.perf_counter()
+        logger.info(self, 'SL DEBUG: Before init_amps. Current use %d MB', lib.current_memory()[0])
+        nocc = self.nocc
+        nvir = self.nmo - nocc
+        nkpts = self.nkpts
 
-    def init_amps(self, eris):
+        kpts = self.kpts
+        kqrts = self.kqrts
+        rmat = self.rmat
+        assert rmat is not None
+
+        metadata = {'kpts': kpts, 'rmat': rmat,
+                    'label': 'ov', 'trans': 'nc', 'incore': True, 'prefix':'t1_init'}
+        t1 = ktensor.zeros((nocc, nvir), dtype=eris.fock.dtype, metadata=metadata)
+
+        metadata = {'kpts': kpts, 'kqrts': kqrts, 'rmat': rmat,
+                    'label': 'oovv', 'trans': 'nncc', 'incore': self.t2_incore, 'prefix':'t2_init'}
+        t2 = ktensor.zeros((nocc,nocc,nvir,nvir), dtype=eris.fock.dtype, metadata=metadata)
+        mo_e_o = [eris.mo_energy[k][:nocc] for k in range(nkpts)]
+        mo_e_v = [eris.mo_energy[k][nocc:] for k in range(nkpts)]
+
+        # Get location of padded elements in occupied and virtual space
+        nonzero_opadding, nonzero_vpadding = padding_k_idx(self, kind="split")
+
+        emp2 = 0.0
+        local_mp2 = 0.0
+        nibz = len(kqrts.kqrts_ibz)
+        base = nibz // size
+        rem = nibz % size
+        xstart = rank * base + min(rank, rem)
+        xend = xstart + base + (1 if rank < rem else 0)
+        for i in range(xstart, xend):
+            ki, kj, ka, kb = kqrts.kqrts_ibz[i]
+            weight = kqrts.weights_ibz[i] * nkpts**3
+            eia = _get_epq([0,nocc,ki,mo_e_o,nonzero_opadding],
+                        [0,nvir,ka,mo_e_v,nonzero_vpadding],
+                        fac=[1.0,-1.0])
+            ejb = _get_epq([0,nocc,kj,mo_e_o,nonzero_opadding],
+                        [0,nvir,kb,mo_e_v,nonzero_vpadding],
+                        fac=[1.0,-1.0])
+            eijab = eia[:, None, :, None] + ejb[:, None, :]
+            eris_ijab = eris.oovv[ki, kj, ka]
+            eris_ijba = eris.oovv[ki, kj, kb]
+            t2[ki, kj, ka] = eris_ijab.conj() / eijab
+            woovv = 2 * eris_ijab - eris_ijba.transpose(0, 1, 3, 2)
+            local_energy = np.einsum('ijab,ijab', t2[ki, kj, ka], woovv) * weight
+            local_mp2 += local_energy
+            
+        emp2 = comm.allreduce(local_mp2, op=MPI.SUM)
+        
+        if self.t2_incore:
+            # If in mem, gather the distributed amplitudes so every rank has the complete t2 tensor.
+            safeAllreduceInPlace_ksymm(comm, t2)
+            # Sanity check
+            np.save('t2_data_mpi.npy', t2.data)
+            ref = comm.bcast(t2.data, root=0)
+            ok = np.allclose(ref, t2.data)
+            logger.info(self, f"Rank {rank}: arrays match? {ok}")
+
+        # safeAllreduceInPlace(comm, t2)
+        self.emp2 = emp2.real
+        self.emp2 /= nkpts
+        
+        if rank == 0:
+            logger.info(self, 'SL DEBUG: After init_amps. Current use %d MB', lib.current_memory()[0])
+            logger.info(self, 'Init t2, MP2 energy (with fock eigenvalue shift) = %.15g', self.emp2)
+            logger.timer(self, 'init mp2', *time0)
+        
+        return self.emp2, t1, t2
+
+    def _init_amps(self, eris):
         time0 = logger.process_clock(), logger.perf_counter()
         logger.info(self, 'SL DEBUG: Before init_amps. Current use %d MB', lib.current_memory()[0])
         nocc = self.nocc
@@ -501,11 +930,20 @@ class KsymAdaptedRCCSD(RCCSD):
             emp2 += np.einsum('ijab,ijab', t2[ki, kj, ka], woovv) * weight
 
         self.emp2 = emp2.real / nkpts
+        
+        np.save('t2_data.npy', t2.data)
+        
         logger.info(self, 'SL DEBUG: After init_amps. Current use %d MB', lib.current_memory()[0])
         logger.info(self, 'Init t2, MP2 energy (with fock eigenvalue shift) = %.15g', self.emp2)
         logger.timer(self, 'init mp2', *time0)
         return self.emp2, t1, t2
-
+    
+    def init_amps(self, eris):
+        if getattr(self, "do_mpi", True):
+            return self._init_amps_mpi(eris) 
+        return self._init_amps(eris)
+    
+    
     def amplitudes_to_vector(self, t1, t2):
         t1_raw = np.asarray(getattr(t1, 'data', t1))
         t2_raw = np.asarray(getattr(t2, 'data', t2))
@@ -532,9 +970,15 @@ class KsymAdaptedRCCSD(RCCSD):
                              metadata=metadata)
         return t1, t2
 
-    energy = energy
-    update_amps = update_amps
-
+    def energy(self, t1, t2, eris):
+        if getattr(self, "do_mpi", True):
+            return energy_mpi(self, t1, t2, eris)
+        return energy(self, t1, t2, eris)
+    
+    def update_amps(self, t1, t2, eris):
+        if getattr(self, "do_mpi", True):
+            return _update_amps_mpi(self, t1, t2, eris)
+        return _update_amps(self, t1, t2, eris)
 
 def _make_eris_incore(cc, eris, fao2mo):
     log = logger.Logger(cc.stdout, cc.verbose)
@@ -603,6 +1047,9 @@ def _make_eris_incore(cc, eris, fao2mo):
         eris.voov = eris.voov.todense()
         eris.vovv = eris.vovv.todense()
         eris.vvvv = eris.vvvv.todense()
+    
+    # Temporary saving
+    _init_df_eris(cc, eris)
 
     log.timer('CCSD integral transformation', *cput0)
     return eris
@@ -727,6 +1174,63 @@ def _make_eris_outcore(cc, eris, fao2mo):
     log.timer('CCSD integral transformation', *cput0)
     return eris
 
+def _init_df_eris(cc, eris):
+    from pyscf.ao2mo import _ao2mo
+    if cc._scf.with_df._cderi is None:
+        cc._scf.with_df.build()
+
+    cell = cc._scf.cell
+    if cell.dimension == 2:
+        # 2D ERIs are not positive definite. The 3-index tensors are stored in
+        # two part. One corresponds to the positive part and one corresponds
+        # to the negative part. The negative part is not considered in the
+        # DF-driven CCSD implementation.
+        raise NotImplementedError
+
+    nocc = cc.nocc
+    nmo = cc.nmo
+    nvir = nmo - nocc
+    nao = cell.nao_nr()
+
+    kpts = getattr(cc.kpts, 'kpts', cc.kpts)
+    nkpts = len(kpts)
+    #naux = cc._scf.with_df.get_naoaux()
+    if gamma_point(kpts):
+        dtype = np.double
+    else:
+        dtype = np.complex128
+    dtype = np.result_type(dtype, *eris.mo_coeff)
+    eris.Lpv = Lpv = np.empty((nkpts,nkpts), dtype=object)
+
+    tao = []
+    ao_loc = None
+#    with df.CDERIArray(cc._scf.with_df._cderi) as cderi_array:
+#        for ki in range(nkpts):
+#            for kj in range(nkpts):
+#                Lpq = cderi_array[ki,kj]
+    for ki, kpti in enumerate(kpts):
+        for kj, kptj in enumerate(kpts):
+            kpti_kptj = np.array((kpti, kptj))
+            # This loader is compatible with the old GDF format
+            with df._load3c(cc._scf.with_df._cderi, 'j3c', kpti_kptj) as j3c:
+                Lpq = np.asarray(j3c)
+
+                mo = np.hstack((eris.mo_coeff[ki], eris.mo_coeff[kj][:, nocc:]))
+                mo = np.asarray(mo, dtype=dtype, order='F')
+                if dtype == np.double:
+                    out = _ao2mo.nr_e2(Lpq, mo, (0, nmo, nmo, nmo + nvir), aosym='s2')
+                else:
+                    #Note: Lpq.shape[0] != naux if linear dependency is found in auxbasis
+                    if Lpq[0].size != nao**2: # aosym = 's2'
+                        Lpq = lib.unpack_tril(Lpq).astype(np.complex128)
+                    out = _ao2mo.r_e2(Lpq, mo, (0, nmo, nmo, nmo + nvir), tao, ao_loc)
+                Lpv[ki,kj] = out.reshape(-1,nmo,nvir)
+    return eris
+
+
+
+#############################################
+### Copied from Ksymm
 
 class _PhysicistsERIs():
     def __init__(self, cell=None):

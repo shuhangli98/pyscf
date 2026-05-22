@@ -200,6 +200,7 @@ def FNOCCSD(mf, thresh=1e-6, pct_occ=None, nvir_act=None, frozen=None):
     pt_no = mp.MP2(mf, frozen=frozen, mo_coeff=no_coeff).set(verbose=0).run()
     mycc = CCSD(mf, frozen=frozen, mo_coeff=no_coeff)
     mycc.delta_emp2 = pt.e_corr - pt_no.e_corr
+    mycc.full_mp2 = pt.e_corr
     from pyscf.lib import logger
     def _finalize(self):
         '''Hook for dumping results and clearing up the object.'''
