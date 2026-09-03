@@ -28,6 +28,33 @@ DEBUG = False
 
 libri = lib.load_library('libri')
 
+
+def _record_df_k_build_timing(dfobj, elapsed):
+    '''Record and print the wall time of one iterative DF K build.'''
+    timings = getattr(dfobj, '_df_k_build_wall_times', None)
+    if timings is None:
+        timings = dfobj._df_k_build_wall_times = []
+    timings.append(float(elapsed))
+    print('[PySCF DF-K K#%d] total: %.6f s' % (len(timings), elapsed),
+          flush=True)
+
+
+def _print_df_k_build_analysis(dfobj):
+    '''Print aggregate wall-time statistics for iterative DF K builds.'''
+    timings = getattr(dfobj, '_df_k_build_wall_times', ())
+    if not timings:
+        return
+    values = numpy.asarray(timings, dtype=numpy.float64)
+    print('\n===== PySCF DF-SCF K-build analysis =====')
+    print('K build call count  %12d' % values.size)
+    print('K build last        %12.6f s' % values[-1])
+    print('K build cumulative  %12.6f s' % values.sum())
+    print('K build minimum     %12.6f s' % values.min())
+    print('K build median      %12.6f s' % numpy.median(values))
+    print('K build mean        %12.6f s' % values.mean())
+    print('K build maximum     %12.6f s' % values.max())
+
+
 def density_fit(mf, auxbasis=None, with_df=None, only_dfj=False):
     '''For the given SCF object, update the J, K matrix constructor with
     corresponding density fitting integrals.
@@ -131,6 +158,7 @@ class _DFHF:
         self.__dict__.update(mf.__dict__)
         self._eri = None
         self.with_df = df
+        self.with_df._df_k_build_wall_times = []
         self.only_dfj = only_dfj
         # Unless DF is used only for J matrix, disable direct_scf for K build.
         # It is more efficient to construct K matrix with MO coefficients than
@@ -145,7 +173,13 @@ class _DFHF:
 
     def reset(self, mol=None):
         self.with_df.reset(mol)
+        self.with_df._df_k_build_wall_times = []
         return super().reset(mol)
+
+    def _finalize(self):
+        obj = super()._finalize()
+        _print_df_k_build_analysis(self.with_df)
+        return obj
 
     def get_jk(self, mol=None, dm=None, hermi=1, with_j=True, with_k=True,
                omega=None):
@@ -285,6 +319,13 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
         return get_j(dfobj, dm, hermi, direct_scf_tol), None
 
     t0 = t1 = (logger.process_clock(), logger.perf_counter())
+    if with_k and dfobj._cderi is None:
+        # Build the cached three-center tensor before starting the iterative
+        # K timer.  dfobj.loop() would otherwise trigger the same build inside
+        # the first timed iteration.
+        dfobj.build()
+    k_wall_start = logger.perf_counter() if with_k else None
+    j_wall_time = 0.
     log = logger.Logger(dfobj.stdout, dfobj.verbose)
     fmmm = _ao2mo.libao2mo.AO2MOmmm_bra_nr_s2
     fdrv = _ao2mo.libao2mo.AO2MOnr_e2_drv
@@ -301,7 +342,9 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
 
     if numpy.iscomplexobj(dms):
         if with_j:
+            j_wall_start = logger.perf_counter()
             vj = numpy.zeros_like(dms)
+            j_wall_time += logger.perf_counter() - j_wall_start
         max_memory = dfobj.max_memory - lib.current_memory()[0]
         blksize = max(4, int(min(dfobj.blockdim, max_memory*.22e6/8/nao**2)))
         buf = numpy.empty((blksize,nao,nao))
@@ -310,10 +353,12 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
             naux, nao_pair = eri1.shape
             eri1 = lib.unpack_tril(eri1, out=buf)
             if with_j:
+                j_wall_start = logger.perf_counter()
                 tmp = numpy.einsum('pij,nji->pn', eri1, dms.real)
                 vj.real += numpy.einsum('pn,pij->nij', tmp, eri1)
                 tmp = numpy.einsum('pij,nji->pn', eri1, dms.imag)
                 vj.imag += numpy.einsum('pn,pij->nij', tmp, eri1)
+                j_wall_time += logger.perf_counter() - j_wall_start
             buf2 = numpy.ndarray((nao,naux,nao), buffer=buf1)
             for k in range(nset):
                 buf2[:] = lib.einsum('pij,jk->ipk', eri1, dms[k].real)
@@ -321,15 +366,23 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
                 buf2[:] = lib.einsum('pij,jk->ipk', eri1, dms[k].imag)
                 vk[k].imag += lib.einsum('ipk,pkj->ij', buf2, eri1)
             t1 = log.timer_debug1('jk', *t1)
-        if with_j: vj = vj.reshape(dm_shape)
+        if with_j:
+            j_wall_start = logger.perf_counter()
+            vj = vj.reshape(dm_shape)
+            j_wall_time += logger.perf_counter() - j_wall_start
         if with_k: vk = vk.reshape(dm_shape)
+        if with_k:
+            k_wall_time = logger.perf_counter() - k_wall_start - j_wall_time
+            _record_df_k_build_timing(dfobj, max(0., k_wall_time))
         logger.timer(dfobj, 'df vj and vk', *t0)
         return vj, vk
 
     if with_j:
+        j_wall_start = logger.perf_counter()
         idx = numpy.arange(nao)
         dmtril = lib.pack_tril(dms + dms.conj().transpose(0,2,1))
         dmtril[:,idx*(idx+1)//2+idx] *= .5
+        j_wall_time += logger.perf_counter() - j_wall_start
 
     if not with_k:
         for eri1 in dfobj.loop():
@@ -364,7 +417,9 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
             assert (nao_pair == nao*(nao+1)//2)
             if with_j:
                 # uses numpy.matmul
+                j_wall_start = logger.perf_counter()
                 vj += dmtril.dot(eri1.T).dot(eri1)
+                j_wall_time += logger.perf_counter() - j_wall_start
 
             for k in range(nset):
                 nocc = orbo[k].shape[1]
@@ -393,7 +448,9 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
             assert (nao_pair == nao*(nao+1)//2)
             if with_j:
                 # uses numpy.matmul
+                j_wall_start = logger.perf_counter()
                 vj += dmtril.dot(eri1.T).dot(eri1)
+                j_wall_time += logger.perf_counter() - j_wall_start
 
             for k in range(nset):
                 buf1 = buf[0,:naux]
@@ -407,10 +464,17 @@ def get_jk(dfobj, dm, hermi=0, with_j=True, with_k=True, direct_scf_tol=1e-13):
                 vk[k] += lib.dot(buf1.reshape(-1,nao).T, buf2.reshape(-1,nao))
             t1 = log.timer_debug1('jk', *t1)
 
-    if with_j: vj = lib.unpack_tril(vj, 1).reshape(dm_shape)
+    if with_j:
+        j_wall_start = logger.perf_counter()
+        vj = lib.unpack_tril(vj, 1).reshape(dm_shape)
+        j_wall_time += logger.perf_counter() - j_wall_start
     if with_k: vk = vk.reshape(dm_shape)
+    if with_k:
+        k_wall_time = logger.perf_counter() - k_wall_start - j_wall_time
+        _record_df_k_build_timing(dfobj, max(0., k_wall_time))
     logger.timer(dfobj, 'df vj and vk', *t0)
     return vj, vk
+
 
 def get_j(dfobj, dm, hermi=0, direct_scf_tol=1e-13):
     from pyscf.scf import _vhf
